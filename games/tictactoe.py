@@ -1,6 +1,7 @@
 import numpy as np
 
-class TickTackToe:
+
+class TicTacToe:
     def __init__(self):
         self.row_count = 3
         self.column_count = 3
@@ -30,10 +31,10 @@ class TickTackToe:
         player = state[row, column]
 
         return (
-            (np.sum(state[row, :]) == player * self.column_count)
-            or (np.sum(state[:, column]) == player * self.row_count)
-            or (np.sum(np.diag(state)) == player * self.row_count)
-            or (np.sum(np.diag(np.flip(state, axis = 0))) == player * self.row_count)
+                np.sum(state[row, :]) == player * self.column_count
+                or np.sum(state[:, column]) == player * self.row_count
+                or np.sum(np.diag(state)) == player * self.row_count
+                or np.sum(np.diag(np.flip(state, axis=0))) == player * self.row_count
         )
 
     def get_value_and_terminated(self, state, action):
@@ -56,4 +57,5 @@ class TickTackToe:
         encoded_state = np.stack(
             (state == -1, state == 0, state == 1)
         ).astype(np.float32)
+
         return encoded_state
