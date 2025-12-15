@@ -23,7 +23,7 @@ args = {
     'num_epochs': 10,
     'temperature': 1.25,
     'dirichlet_epsilon': 0.25,
-    'dirichlet_alpha': 1
+    'dirichlet_alpha': 0.3
 }
 
 deepzero = DeepZeroParallel(model, optimizer, game, args)

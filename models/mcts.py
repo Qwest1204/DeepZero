@@ -80,7 +80,12 @@ class MCTS:
 
         valid_moves = self.game.get_valid_moves(state)
         policy *= valid_moves
-        policy /= np.sum(policy)
+        policy_sum = np.sum(policy)
+        if policy_sum > 0:
+            policy /= policy_sum
+        else:
+            policy = valid_moves.astype(np.float32)
+            policy /= np.sum(policy)
         root.expand(policy)
 
         for search in range(self.args['num_searches']):
@@ -132,7 +137,12 @@ class MCTSParallel:
             spg_policy = policy[i]
             valid_moves = self.game.get_valid_moves(states[i])
             spg_policy *= valid_moves
-            spg_policy /= np.sum(spg_policy)
+            policy_sum = np.sum(spg_policy)
+            if policy_sum > 0:
+                spg_policy /= policy_sum
+            else:
+                spg_policy = valid_moves.astype(np.float32)
+                spg_policy /= np.sum(spg_policy)
 
             spg.root = Node(self.game, self.args, states[i], visit_count=1)
             spg.root.expand(spg_policy)
