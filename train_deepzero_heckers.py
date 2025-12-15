@@ -12,6 +12,7 @@ optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
 
 player = 1
 
+
 args = {
     'C': 2,
     'num_searches': 400,
