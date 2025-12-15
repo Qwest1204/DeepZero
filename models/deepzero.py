@@ -7,6 +7,58 @@ import torch.nn.functional as F
 import random
 import numpy as np
 
+def mask_and_normalize(policy: np.ndarray, valid_moves: np.ndarray) -> np.ndarray:
+    """
+    Маскирует policy по valid_moves и нормализует.
+    Гарантирует отсутствие NaN/Inf и деления на ноль.
+    """
+    policy = policy.astype(np.float64) * valid_moves.astype(np.float64)
+
+    # Обнуляем NaN/Inf
+    policy[~np.isfinite(policy)] = 0.0
+
+    s = policy.sum()
+    if s > 0.0:
+        policy /= s
+        return policy
+
+    # Fallback: равномерно по валидным ходам
+    v = valid_moves.astype(np.float64)
+    v[~np.isfinite(v)] = 0.0
+    s = v.sum()
+    if s > 0.0:
+        v /= s
+        return v
+
+    # Совсем нет ходов — вернём нули (терминальное состояние)
+    return v
+
+
+def normalize_probs(p: np.ndarray) -> np.ndarray:
+    """
+    Нормализация произвольного вектора вероятностей.
+    1) NaN/Inf -> 0
+    2) отрицательные -> 0
+    3) если сумма <= 0 -> равномерное распределение
+    4) гарантируем sum(p) == 1.0 (с поправкой на округление)
+    """
+    p = np.asarray(p, dtype=np.float64)
+    p[~np.isfinite(p)] = 0.0
+    p[p < 0] = 0.0
+
+    s = p.sum()
+    if s <= 0.0:
+        p[:] = 1.0 / len(p)
+        return p
+
+    p /= s
+    # Коррекция накопленной погрешности, чтобы сумма была ровно 1.0
+    diff = 1.0 - p.sum()
+    if abs(diff) > 1e-12:
+        p[np.argmax(p)] += diff
+
+    return p
+
 class SPG:
     def __init__(self, game):
         self.state = game.get_initial_state()
@@ -105,7 +157,7 @@ class DeepZeroParallel:
     def selfPlay(self):
         return_memory = []
         player = 1
-        spGames = [SPG(self.game) for spg in range(self.args['num_parallel_games'])]
+        spGames = [SPG(self.game) for _ in range(self.args['num_parallel_games'])]
 
         while len(spGames) > 0:
             states = np.stack([spg.state for spg in spGames])
@@ -113,36 +165,61 @@ class DeepZeroParallel:
 
             self.mcts.search(neutral_states, spGames)
 
-            for i in range(len(spGames))[::-1]:
+            for i in range(len(spGames) - 1, -1, -1):
                 spg = spGames[i]
 
-                action_probs = np.zeros(self.game.action_size)
+                # Собираем распределение по визитам
+                action_probs = np.zeros(self.game.action_size, dtype=np.float64)
                 for child in spg.root.children:
                     action_probs[child.action_taken] = child.visit_count
-                action_probs_sum = np.sum(action_probs)
-                if action_probs_sum > 0:
-                    action_probs /= action_probs_sum
+
+                visits_sum = action_probs.sum()
+                neutral_state_i = neutral_states[i]
+
+                if visits_sum > 0:
+                    action_probs /= visits_sum
                 else:
-                    # Fallback на равномерное распределение
-                    valid_moves = self.game.get_valid_moves(neutral_states)
-                    action_probs = valid_moves.astype(np.float32)
+                    # Fallback: смотрим реальные валидные ходы для ЭТОЙ партии
+                    valid_moves = self.game.get_valid_moves(neutral_state_i)
+                    if valid_moves.sum() == 0:
+                        # Нет ходов — партия окончена
+                        value, is_terminal = self.game.get_value_and_terminated(
+                            neutral_state_i, None
+                        )
+                        if not is_terminal:
+                            value, is_terminal = 0, True
+
+                        for hist_neutral_state, hist_action_probs, hist_player in spg.memory:
+                            hist_outcome = value if hist_player == player else \
+                                self.game.get_opponent_value(value)
+                            return_memory.append((
+                                self.game.get_encoded_state(hist_neutral_state),
+                                hist_action_probs,
+                                hist_outcome
+                            ))
+                        del spGames[i]
+                        continue
+
+                    action_probs = valid_moves.astype(np.float64)
+                    action_probs = normalize_probs(action_probs)
 
                 spg.memory.append((spg.root.state, action_probs, player))
 
-                temperature_action_probs = action_probs ** (1 / self.args['temperature'])
-                temp_sum = temperature_action_probs.sum()
-                if temp_sum > 0:
-                    temperature_action_probs /= temp_sum
-                else:
-                    temperature_action_probs = action_probs.copy()  # Divide temperature_action_probs with its sum in case of an error
-                action = np.random.choice(self.game.action_size, p=action_probs)
+                # Температурная обработка распределения
+                temperature_action_probs = action_probs ** (1.0 / self.args['temperature'])
+                temperature_action_probs = normalize_probs(temperature_action_probs)
+
+                # Здесь точно sum(temperature_action_probs) == 1 и нет NaN
+                action = np.random.choice(self.game.action_size, p=temperature_action_probs)
+
                 spg.state = self.game.get_next_state(spg.state, action, player)
 
                 value, is_terminal = self.game.get_value_and_terminated(spg.state, action)
 
                 if is_terminal:
                     for hist_neutral_state, hist_action_probs, hist_player in spg.memory:
-                        hist_outcome = value if hist_player == player else self.game.get_opponent_value(value)
+                        hist_outcome = value if hist_player == player else \
+                            self.game.get_opponent_value(value)
                         return_memory.append((
                             self.game.get_encoded_state(hist_neutral_state),
                             hist_action_probs,
