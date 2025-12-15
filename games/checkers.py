@@ -81,7 +81,13 @@ class Checkers:
         Возвращает маску допустимых ходов размером action_size.
         Если есть взятия - возвращает только взятия (взятие обязательно).
         Предполагается что state с перспективы текущего игрока (player=1).
+
+        Поддерживает только одиночное состояние (2D array).
         """
+        # Защита от batch входа - берём только первое состояние если это batch
+        if len(state.shape) == 3:
+            state = state[0]
+
         valid_moves = np.zeros(self.action_size, dtype=np.uint8)
         captures = []
         regular_moves = []
