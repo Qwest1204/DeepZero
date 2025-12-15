@@ -118,6 +118,7 @@ class MCTS:
 
     @torch.no_grad()
     def search(self, state):
+        winrate = None
         root = Node(self.game, self.args, state, visit_count=1)
 
         policy, _ = self.model(
@@ -175,6 +176,7 @@ class MCTS:
                     policy /= np.sum(policy)
 
                 value = value.item()
+                winrate = value
 
                 node.expand(policy)
 
@@ -184,7 +186,7 @@ class MCTS:
         for child in root.children:
             action_probs[child.action_taken] = child.visit_count
         action_probs /= np.sum(action_probs)
-        return action_probs
+        return action_probs, winrate
 
 
 class MCTSParallel:

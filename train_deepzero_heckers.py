@@ -14,12 +14,12 @@ player = 1
 
 
 args = {
-    'C': 2,
-    'num_searches': 400,
-    'num_iterations': 10,
-    'num_parallel_games': 200,
+    'C': 1.5,
+    'num_searches': 600,
+    'num_iterations': 60,
+    'num_parallel_games': 128,
     'batch_size': 128,
-    'num_selfPlay_iterations': 1000,
+    'num_selfPlay_iterations': 2000,
     'num_epochs': 10,
     'temperature': 1.25,
     'dirichlet_epsilon': 0.25,
