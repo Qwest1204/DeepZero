@@ -123,7 +123,7 @@ class DeepZeroParallel:
                     action_probs /= action_probs_sum
                 else:
                     # Fallback на равномерное распределение
-                    valid_moves = self.game.get_valid_moves(neutral_state)
+                    valid_moves = self.game.get_valid_moves(neutral_states)
                     action_probs = valid_moves.astype(np.float32)
 
                 spg.memory.append((spg.root.state, action_probs, player))
