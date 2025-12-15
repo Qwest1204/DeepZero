@@ -118,7 +118,13 @@ class DeepZeroParallel:
                 action_probs = np.zeros(self.game.action_size)
                 for child in spg.root.children:
                     action_probs[child.action_taken] = child.visit_count
-                action_probs /= np.sum(action_probs)
+                action_probs_sum = np.sum(action_probs)
+                if action_probs_sum > 0:
+                    action_probs /= action_probs_sum
+                else:
+                    # Fallback на равномерное распределение
+                    valid_moves = self.game.get_valid_moves(neutral_state)
+                    action_probs = valid_moves.astype(np.float32)
 
                 spg.memory.append((spg.root.state, action_probs, player))
 
