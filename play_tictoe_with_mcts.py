@@ -10,11 +10,11 @@ device = torch.device("cpu")
 
 args = {
     'C': 2,
-    'num_search': 100,
+    'num_search': 300,
     'num_iterations': 3,
-    'num_parallel_games': 100,
-    'batch_size': 16,
-    'num_selfplay_iterations': 350,
+    'num_parallel_games': 150,
+    'batch_size': 32,
+    'num_selfplay_iterations': 500,
     'num_epochs': 4,
     'temperature': 1.25,
     'dirichlet_epsilon': 0.25,
@@ -22,7 +22,7 @@ args = {
 }
 
 
-model = ResNet(game, 4, 32, device=device)
+model = ResNet(game, 4, 64, device=device)
 model.load_state_dict(torch.load("weights/model_2_TicTacToe.pt", map_location=device))
 model.eval()
 mcts = MCTS(game, args, model)
