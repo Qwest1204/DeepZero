@@ -50,8 +50,6 @@ class Node:
                 child = Node(self.game, self.args, child_state, self, action, prob)
                 self.children.append(child)
 
-        #return child
-
     def backpropagate(self, value):
         self.value_sum += value
         self.visit_count += 1
@@ -75,17 +73,29 @@ class MCTS:
             torch.tensor(self.game.get_encoded_state(state), device=self.model.device).unsqueeze(0)
         )
         policy = torch.softmax(policy, axis=1).squeeze(0).cpu().numpy()
-        policy = (1 - self.args['dirichlet_epsilon']) * policy + self.args['dirichlet_epsilon'] \
-                 * np.random.dirichlet([self.args['dirichlet_alpha']] * self.game.action_size)
 
         valid_moves = self.game.get_valid_moves(state)
+
+        # ИСПРАВЛЕНИЕ 1: Добавляем Dirichlet шум только к валидным ходам
+        valid_indices = np.where(valid_moves == 1)[0]
+        if len(valid_indices) > 0:
+            dirichlet_noise = np.zeros(self.game.action_size)
+            dirichlet_noise[valid_indices] = np.random.dirichlet(
+                [self.args['dirichlet_alpha']] * len(valid_indices)
+            )
+            policy = (1 - self.args['dirichlet_epsilon']) * policy + \
+                     self.args['dirichlet_epsilon'] * dirichlet_noise
+
+        # ИСПРАВЛЕНИЕ 2: Маскируем и нормализуем с защитой от деления на ноль
         policy *= valid_moves
         policy_sum = np.sum(policy)
         if policy_sum > 0:
             policy /= policy_sum
         else:
+            # Если все вероятности 0, используем равномерное распределение по валидным ходам
             policy = valid_moves.astype(np.float32)
             policy /= np.sum(policy)
+
         root.expand(policy)
 
         for search in range(self.args['num_searches']):
@@ -103,8 +113,15 @@ class MCTS:
                 )
                 policy = torch.softmax(policy, axis=1).squeeze(0).cpu().numpy()
                 valid_moves = self.game.get_valid_moves(node.state)
+
+                # ИСПРАВЛЕНИЕ 3: Защита от деления на ноль
                 policy *= valid_moves
-                policy /= np.sum(policy)
+                policy_sum = np.sum(policy)
+                if policy_sum > 0:
+                    policy /= policy_sum
+                else:
+                    policy = valid_moves.astype(np.float32)
+                    policy /= np.sum(policy)
 
                 value = value.item()
 
@@ -118,6 +135,7 @@ class MCTS:
         action_probs /= np.sum(action_probs)
         return action_probs
 
+
 class MCTSParallel:
     def __init__(self, game, args, model):
         self.game = game
@@ -126,26 +144,34 @@ class MCTSParallel:
 
     @torch.no_grad()
     def search(self, states, spGames):
+        # states shape: (batch, 8, 8)
         policy, _ = self.model(
             torch.tensor(self.game.get_encoded_state(states), device=self.model.device)
         )
         policy = torch.softmax(policy, axis=1).cpu().numpy()
-        policy = (1 - self.args['dirichlet_epsilon']) * policy + self.args['dirichlet_epsilon'] \
-                 * np.random.dirichlet([self.args['dirichlet_alpha']] * self.game.action_size, size=policy.shape[0])
 
         for i, spg in enumerate(spGames):
-            spg_policy = policy[i]
+            spg_policy = policy[i].copy()
             valid_moves = self.game.get_valid_moves(states[i])
+
+            # ИСПРАВЛЕНИЕ 1: Dirichlet шум только для валидных ходов
+            valid_indices = np.where(valid_moves == 1)[0]
+            if len(valid_indices) > 0:
+                dirichlet_noise = np.zeros(self.game.action_size)
+                dirichlet_noise[valid_indices] = np.random.dirichlet(
+                    [self.args['dirichlet_alpha']] * len(valid_indices)
+                )
+                spg_policy = (1 - self.args['dirichlet_epsilon']) * spg_policy + \
+                             self.args['dirichlet_epsilon'] * dirichlet_noise
+
+            # ИСПРАВЛЕНИЕ 2: Защита от деления на ноль
             spg_policy *= valid_moves
             policy_sum = np.sum(spg_policy)
             if policy_sum > 0:
                 spg_policy /= policy_sum
             else:
-                # Fallback на равномерное распределение
                 spg_policy = valid_moves.astype(np.float32)
-                policy_sum = np.sum(spg_policy)
-                if policy_sum > 0:
-                    spg_policy /= policy_sum
+                spg_policy /= np.sum(spg_policy)
 
             spg.root = Node(self.game, self.args, states[i], visit_count=1)
             spg.root.expand(spg_policy)
@@ -163,7 +189,6 @@ class MCTSParallel:
 
                 if is_terminal:
                     node.backpropagate(value)
-
                 else:
                     spg.node = node
 
@@ -171,21 +196,28 @@ class MCTSParallel:
                                   spGames[mappingIdx].node is not None]
 
             if len(expandable_spGames) > 0:
-                states = np.stack([spGames[mappingIdx].node.state for mappingIdx in expandable_spGames])
+                states_batch = np.stack([spGames[mappingIdx].node.state for mappingIdx in expandable_spGames])
 
                 policy, value = self.model(
-                    torch.tensor(self.game.get_encoded_state(states), device=self.model.device)
+                    torch.tensor(self.game.get_encoded_state(states_batch), device=self.model.device)
                 )
                 policy = torch.softmax(policy, axis=1).cpu().numpy()
                 value = value.cpu().numpy()
 
-            for i, mappingIdx in enumerate(expandable_spGames):
-                node = spGames[mappingIdx].node
-                spg_policy, spg_value = policy[i], value[i]
+                for i, mappingIdx in enumerate(expandable_spGames):
+                    node = spGames[mappingIdx].node
+                    spg_policy, spg_value = policy[i].copy(), value[i]
 
-                valid_moves = self.game.get_valid_moves(node.state)
-                spg_policy *= valid_moves
-                spg_policy /= np.sum(spg_policy)
+                    valid_moves = self.game.get_valid_moves(node.state)
 
-                node.expand(spg_policy)
-                node.backpropagate(spg_value)
+                    # ИСПРАВЛЕНИЕ 3: Защита от деления на ноль
+                    spg_policy *= valid_moves
+                    policy_sum = np.sum(spg_policy)
+                    if policy_sum > 0:
+                        spg_policy /= policy_sum
+                    else:
+                        spg_policy = valid_moves.astype(np.float32)
+                        spg_policy /= np.sum(spg_policy)
+
+                    node.expand(spg_policy)
+                    node.backpropagate(spg_value)
