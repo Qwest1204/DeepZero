@@ -1,7 +1,7 @@
 import math
 import numpy as np
 import torch
-
+from tqdm import tqdm
 
 class Node:
     def __init__(self, game, args, state, parent=None, action_taken=None, prior=0, visit_count=0):
@@ -82,7 +82,7 @@ class MCTS:
         policy /= np.sum(policy)
         root.expand(policy)
         net_win_rate = None
-        for search in range(self.args['num_search']):
+        for search in tqdm(range(self.args['num_search'])):
             node = root
 
             while node.is_fully_expanded():
@@ -137,7 +137,7 @@ class MCTSParallel:
             spg.root = Node(self.game, self.args, states[i], visit_count=1)
             spg.root.expand(spg_policy)
 
-        for search in range(self.args['num_search']):
+        for search in tqdm(range(self.args['num_search'])):
             for spg in spGames:
                 spg.node = None
                 node = spg.root
