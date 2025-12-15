@@ -141,8 +141,11 @@ class MCTSParallel:
             if policy_sum > 0:
                 spg_policy /= policy_sum
             else:
+                # Fallback на равномерное распределение
                 spg_policy = valid_moves.astype(np.float32)
-                spg_policy /= np.sum(spg_policy)
+                policy_sum = np.sum(spg_policy)
+                if policy_sum > 0:
+                    spg_policy /= policy_sum
 
             spg.root = Node(self.game, self.args, states[i], visit_count=1)
             spg.root.expand(spg_policy)
