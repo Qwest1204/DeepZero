@@ -122,7 +122,7 @@ class DeepZeroParallel:
 
                 spg.memory.append((spg.root.state, action_probs, player))
 
-                temperature_action_probs = action_probs ** (1/self.args['temperature'])
+                temperature_action_probs = action_probs**(1 / self.args['temperature'])
                 action = np.random.choice(self.game.action_size, p = action_probs)
 
                 spg.state = self.game.get_next_state(spg.state, action, player)
