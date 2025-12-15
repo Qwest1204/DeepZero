@@ -3,6 +3,58 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
+def mask_and_normalize(policy: np.ndarray, valid_moves: np.ndarray) -> np.ndarray:
+    """
+    Маскирует policy по valid_moves и нормализует.
+    Гарантирует отсутствие NaN/Inf и деления на ноль.
+    """
+    policy = policy.astype(np.float64) * valid_moves.astype(np.float64)
+
+    # Обнуляем NaN/Inf
+    policy[~np.isfinite(policy)] = 0.0
+
+    s = policy.sum()
+    if s > 0.0:
+        policy /= s
+        return policy
+
+    # Fallback: равномерно по валидным ходам
+    v = valid_moves.astype(np.float64)
+    v[~np.isfinite(v)] = 0.0
+    s = v.sum()
+    if s > 0.0:
+        v /= s
+        return v
+
+    # Совсем нет ходов — вернём нули (терминальное состояние)
+    return v
+
+
+def normalize_probs(p: np.ndarray) -> np.ndarray:
+    """
+    Нормализация произвольного вектора вероятностей.
+    1) NaN/Inf -> 0
+    2) отрицательные -> 0
+    3) если сумма <= 0 -> равномерное распределение
+    4) гарантируем sum(p) == 1.0 (с поправкой на округление)
+    """
+    p = np.asarray(p, dtype=np.float64)
+    p[~np.isfinite(p)] = 0.0
+    p[p < 0] = 0.0
+
+    s = p.sum()
+    if s <= 0.0:
+        p[:] = 1.0 / len(p)
+        return p
+
+    p /= s
+    # Коррекция накопленной погрешности, чтобы сумма была ровно 1.0
+    diff = 1.0 - p.sum()
+    if abs(diff) > 1e-12:
+        p[np.argmax(p)] += diff
+
+    return p
+
 class Node:
     def __init__(self, game, args, state, parent=None, action_taken=None, prior=0, visit_count=0):
         self.game = game
