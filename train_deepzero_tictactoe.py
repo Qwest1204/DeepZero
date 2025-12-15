@@ -5,7 +5,7 @@ import torch
 
 game = TicTacToe()
 
-device = torch.device("cpu")
+device = torch.device("cuda")
 
 model = ResNet(game, 4, 32, device)
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
