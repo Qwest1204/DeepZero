@@ -14,7 +14,7 @@ player = 1
 
 args = {
     'C': 2,
-    'num_search': 400,
+    'num_searches': 400,
     'num_iterations': 10,
     'num_parallel_games': 200,
     'batch_size': 128,
