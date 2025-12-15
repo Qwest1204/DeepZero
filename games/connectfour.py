@@ -4,6 +4,7 @@ class ConnectFour:
     def __init__(self):
         self.row_count = 6
         self.column_count = 7
+        self.shape_obs = 3
         self.action_size = self.column_count
         self.in_a_row = 4
 

@@ -4,6 +4,7 @@ import numpy as np
 class TicTacToe:
     def __init__(self):
         self.row_count = 3
+        self.shape_obs = 3
         self.column_count = 3
         self.action_size = self.row_count * self.column_count
 
