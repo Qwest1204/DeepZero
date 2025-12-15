@@ -3,6 +3,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
+
 class Node:
     def __init__(self, game, args, state, parent=None, action_taken=None, prior=0, visit_count=0):
         self.game = game
@@ -71,37 +72,37 @@ class MCTS:
         root = Node(self.game, self.args, state, visit_count=1)
 
         policy, _ = self.model(
-            torch.tensor(self.game.get_encoded_state(state), device=self.model.device).unsqueeze(0),
+            torch.tensor(self.game.get_encoded_state(state), device=self.model.device).unsqueeze(0)
         )
         policy = torch.softmax(policy, axis=1).squeeze(0).cpu().numpy()
-        policy = (1 - self.args['dirichlet_epsilon'])*policy + self.args['dirichlet_epsilon'] \
-                  * np.random.dirichlet([self.args['dirichlet_alpha']] * self.game.action_size )
+        policy = (1 - self.args['dirichlet_epsilon']) * policy + self.args['dirichlet_epsilon'] \
+                 * np.random.dirichlet([self.args['dirichlet_alpha']] * self.game.action_size)
 
         valid_moves = self.game.get_valid_moves(state)
-        policy += valid_moves
+        policy *= valid_moves
         policy /= np.sum(policy)
         root.expand(policy)
-        net_win_rate = None
-        for search in tqdm(range(self.args['num_search'])):
+
+        for search in range(self.args['num_searches']):
             node = root
 
             while node.is_fully_expanded():
                 node = node.select()
 
-            value, is_terminate = self.game.get_value_and_terminated(node.state, node.action_taken)
+            value, is_terminal = self.game.get_value_and_terminated(node.state, node.action_taken)
             value = self.game.get_opponent_value(value)
 
-            if not is_terminate:
+            if not is_terminal:
                 policy, value = self.model(
-                    torch.tensor(self.game.get_encoded_state(node.state), device=self.model.device).unsqueeze(0),
+                    torch.tensor(self.game.get_encoded_state(node.state), device=self.model.device).unsqueeze(0)
                 )
-                net_win_rate = value.item()
-                policy = torch.softmax(policy, axis=1).squeeze(0).detach().cpu().numpy()
+                policy = torch.softmax(policy, axis=1).squeeze(0).cpu().numpy()
                 valid_moves = self.game.get_valid_moves(node.state)
                 policy *= valid_moves
                 policy /= np.sum(policy)
 
                 value = value.item()
+
                 node.expand(policy)
 
             node.backpropagate(value)
@@ -110,8 +111,7 @@ class MCTS:
         for child in root.children:
             action_probs[child.action_taken] = child.visit_count
         action_probs /= np.sum(action_probs)
-        return action_probs, net_win_rate
-
+        return action_probs
 
 class MCTSParallel:
     def __init__(self, game, args, model):
@@ -137,7 +137,7 @@ class MCTSParallel:
             spg.root = Node(self.game, self.args, states[i], visit_count=1)
             spg.root.expand(spg_policy)
 
-        for search in tqdm(range(self.args['num_search'])):
+        for search in range(self.args['num_searches']):
             for spg in spGames:
                 spg.node = None
                 node = spg.root
