@@ -5,7 +5,7 @@ import torch
 
 game = Checkers()
 
-device = torch.device("cpu")
+device = torch.device("cuda")
 
 model = ResNet(game, 24, 256, device)
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
