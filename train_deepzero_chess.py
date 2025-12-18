@@ -7,14 +7,12 @@ game = Checkers()
 
 device = torch.device("cuda")
 
-model = ResNet(game, 32, 512, device)
+model = ResNet(game, 24, 512, device)
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
-
-player = 1
 
 args = {
     'C': 1.5,
-    'num_searches': 2000,
+    'num_searches': 800,
     'num_iterations': 60,
     'num_parallel_games': 128,
     'batch_size': 128,

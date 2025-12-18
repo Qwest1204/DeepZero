@@ -55,6 +55,7 @@ def normalize_probs(p: np.ndarray) -> np.ndarray:
 
     return p
 
+
 class Node:
     def __init__(self, game, args, state, parent=None, action_taken=None, prior=0, visit_count=0):
         self.game = game
@@ -63,9 +64,7 @@ class Node:
         self.parent = parent
         self.action_taken = action_taken
         self.prior = prior
-
         self.children = []
-
         self.visit_count = visit_count
         self.value_sum = 0
 
@@ -75,13 +74,11 @@ class Node:
     def select(self):
         best_child = None
         best_ucb = -np.inf
-
         for child in self.children:
             ucb = self.get_ucb(child)
             if ucb > best_ucb:
                 best_child = child
                 best_ucb = ucb
-
         return best_child
 
     def get_ucb(self, child):
@@ -97,17 +94,16 @@ class Node:
                 child_state = self.state.copy()
                 child_state = self.game.get_next_state(child_state, action, 1)
                 child_state = self.game.change_perspective(child_state, player=-1)
-
                 child = Node(self.game, self.args, child_state, self, action, prob)
                 self.children.append(child)
 
     def backpropagate(self, value):
         self.value_sum += value
         self.visit_count += 1
-
         value = self.game.get_opponent_value(value)
         if self.parent is not None:
             self.parent.backpropagate(value)
+
 
 
 class MCTS:
@@ -125,10 +121,8 @@ class MCTS:
             torch.tensor(self.game.get_encoded_state(state), device=self.model.device).unsqueeze(0)
         )
         policy = torch.softmax(policy, axis=1).squeeze(0).cpu().numpy()
-
         valid_moves = self.game.get_valid_moves(state)
 
-        # ИСПРАВЛЕНИЕ 1: Добавляем Dirichlet шум только к валидным ходам
         valid_indices = np.where(valid_moves == 1)[0]
         if len(valid_indices) > 0:
             dirichlet_noise = np.zeros(self.game.action_size)
@@ -138,21 +132,11 @@ class MCTS:
             policy = (1 - self.args['dirichlet_epsilon']) * policy + \
                      self.args['dirichlet_epsilon'] * dirichlet_noise
 
-        # ИСПРАВЛЕНИЕ 2: Маскируем и нормализуем с защитой от деления на ноль
-        policy *= valid_moves
-        policy_sum = np.sum(policy)
-        if policy_sum > 0:
-            policy /= policy_sum
-        else:
-            # Если все вероятности 0, используем равномерное распределение по валидным ходам
-            policy = valid_moves.astype(np.float32)
-            policy /= np.sum(policy)
-
+        policy = mask_and_normalize(policy, valid_moves)
         root.expand(policy)
 
         for search in range(self.args['num_searches']):
             node = root
-
             while node.is_fully_expanded():
                 node = node.select()
 
@@ -165,19 +149,9 @@ class MCTS:
                 )
                 policy = torch.softmax(policy, axis=1).squeeze(0).cpu().numpy()
                 valid_moves = self.game.get_valid_moves(node.state)
-
-                # ИСПРАВЛЕНИЕ 3: Защита от деления на ноль
-                policy *= valid_moves
-                policy_sum = np.sum(policy)
-                if policy_sum > 0:
-                    policy /= policy_sum
-                else:
-                    policy = valid_moves.astype(np.float32)
-                    policy /= np.sum(policy)
-
+                policy = mask_and_normalize(policy, valid_moves)
                 value = value.item()
                 winrate = value
-
                 node.expand(policy)
 
             node.backpropagate(value)
@@ -202,7 +176,6 @@ class MCTSParallel:
         )
         policy = torch.softmax(policy, dim=1).cpu().numpy()
 
-        # === Инициализация корней ===
         for i, spg in enumerate(spGames):
             spg_policy = policy[i].copy()
             valid_moves = self.game.get_valid_moves(states[i])
@@ -217,11 +190,9 @@ class MCTSParallel:
                              self.args['dirichlet_epsilon'] * dirichlet_noise
 
             spg_policy = mask_and_normalize(spg_policy, valid_moves)
-
             spg.root = Node(self.game, self.args, states[i], visit_count=1)
             spg.root.expand(spg_policy)
 
-        # === Поиск ===
         for search in range(self.args['num_searches']):
             for spg in spGames:
                 spg.node = None
@@ -258,9 +229,7 @@ class MCTSParallel:
                 for i, mappingIdx in enumerate(expandable_spGames):
                     node = spGames[mappingIdx].node
                     spg_policy, spg_value = policy[i].copy(), value[i]
-
                     valid_moves = self.game.get_valid_moves(node.state)
                     spg_policy = mask_and_normalize(spg_policy, valid_moves)
-
                     node.expand(spg_policy)
                     node.backpropagate(spg_value)
