@@ -1,9 +1,9 @@
-from games.checkers import Checkers
+from games.chess import Chess
 from models.resnet import ResNet
 from models.deepzero import DeepZeroParallel
 import torch
 
-game = Checkers()
+game = Chess()
 
 device = torch.device("cuda")
 
