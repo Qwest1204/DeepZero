@@ -1,6 +1,7 @@
 from models.mcts import MCTS, MCTSParallel
 from datetime import datetime
 from models.resnet import ResNet
+import os
 import torch
 import torch.nn as nn
 from tqdm import trange
