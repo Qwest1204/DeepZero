@@ -83,10 +83,9 @@ class Node:
 
     def get_ucb(self, child):
         if child.visit_count == 0:
-            q_value = 0
-        else:
-            q_value = 1 - ((child.value_sum / child.visit_count) + 1) / 2
-        return q_value + self.args['C'] * (math.sqrt(self.visit_count) / (child.visit_count + 1)) * child.prior
+            return self.args['C'] * child.prior * math.sqrt(self.visit_count + 1)
+        q_value = child.value_sum / child.visit_count  # value с точки зрения корня
+        return q_value + self.args['C'] * child.prior * math.sqrt(self.visit_count) / (child.visit_count + 1)
 
     def expand(self, policy):
         for action, prob in enumerate(policy):
@@ -102,7 +101,6 @@ class Node:
     def backpropagate(self, value):
         self.value_sum += value
         self.visit_count += 1
-        value = self.game.get_opponent_value(value)
         if self.parent is not None:
             self.parent.backpropagate(value)
 
@@ -144,7 +142,6 @@ class MCTS:
                 node = node.select()
 
             value, is_terminal = self.game.get_value_and_terminated(node.state, node.action_taken)
-            value = self.game.get_opponent_value(value)
 
             if not is_terminal:
                 policy, value = self.model(
@@ -209,7 +206,6 @@ class MCTSParallel:
                 value, is_terminal = self.game.get_value_and_terminated(
                     node.state, node.action_taken
                 )
-                value = self.game.get_opponent_value(value)
 
                 if is_terminal:
                     node.backpropagate(value)
