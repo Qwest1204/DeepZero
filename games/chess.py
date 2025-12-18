@@ -16,7 +16,7 @@ class Chess:
     def __init__(self):
         self.row_count = 8
         self.column_count = 8
-        self.shape_obs = 13
+        self.shape_obs = 19
         self.action_size = 64 * 64
 
         self._piece_to_chess = {
@@ -30,48 +30,41 @@ class Chess:
         return "Chess"
 
     def get_initial_state(self):
-        state = np.zeros((8, 8), dtype=np.int8)
-        state[0] = [-self.ROOK, -self.KNIGHT, -self.BISHOP, -self.QUEEN,
-                    -self.KING, -self.BISHOP, -self.KNIGHT, -self.ROOK]
-        state[1] = [-self.PAWN] * 8
-        state[6] = [self.PAWN] * 8
-        state[7] = [self.ROOK, self.KNIGHT, self.BISHOP, self.QUEEN,
-                    self.KING, self.BISHOP, self.KNIGHT, self.ROOK]
-        return state
+        pieces = np.zeros((8, 8), dtype=np.int8)
+        pieces[0] = [-self.ROOK, -self.KNIGHT, -self.BISHOP, -self.QUEEN,
+                     -self.KING, -self.BISHOP, -self.KNIGHT, -self.ROOK]
+        pieces[1] = [-self.PAWN] * 8
+        pieces[6] = [self.PAWN] * 8
+        pieces[7] = [self.ROOK, self.KNIGHT, self.BISHOP, self.QUEEN,
+                     self.KING, self.BISHOP, self.KNIGHT, self.ROOK]
+        return {
+            'pieces': pieces,
+            'ep_square': None,
+            'castling_rights': chess.BB_A1 | chess.BB_H1 | chess.BB_A8 | chess.BB_H8,
+            'halfmove_clock': 0
+        }
 
     def _state_to_board(self, state, player=1):
-        """Конвертирует state в chess.Board"""
+        pieces = state['pieces'] if isinstance(state, dict) else state
         board = chess.Board(fen=None)
         board.clear()
-
         for row in range(8):
             for col in range(8):
-                piece_val = state[row, col]
+                piece_val = pieces[row, col]
                 if piece_val != 0:
                     piece_type = self._piece_to_chess[abs(piece_val)]
                     color = chess.WHITE if piece_val > 0 else chess.BLACK
                     square = chess.square(col, 7 - row)
                     board.set_piece_at(square, chess.Piece(piece_type, color))
-
         board.turn = chess.WHITE if player == 1 else chess.BLACK
-
-        # Права рокировки
-        board.castling_rights = chess.BB_EMPTY
-        if state[7, 4] == self.KING:
-            if state[7, 7] == self.ROOK:
-                board.castling_rights |= chess.BB_H1
-            if state[7, 0] == self.ROOK:
-                board.castling_rights |= chess.BB_A1
-        if state[0, 4] == -self.KING:
-            if state[0, 7] == -self.ROOK:
-                board.castling_rights |= chess.BB_H8
-            if state[0, 0] == -self.ROOK:
-                board.castling_rights |= chess.BB_A8
-
+        if isinstance(state, dict):
+            board.ep_square = state['ep_square']
+            board.castling_rights = state['castling_rights']
+            board.halfmove_clock = state['halfmove_clock']
         return board
 
     def _board_to_state(self, board):
-        state = np.zeros((8, 8), dtype=np.int8)
+        pieces = np.zeros((8, 8), dtype=np.int8)
         for square in chess.SQUARES:
             piece = board.piece_at(square)
             if piece:
@@ -80,19 +73,21 @@ class Chess:
                 value = self._chess_to_piece[piece.piece_type]
                 if piece.color == chess.BLACK:
                     value = -value
-                state[row, col] = value
-        return state
+                pieces[row, col] = value
+        return {
+            'pieces': pieces,
+            'ep_square': board.ep_square,
+            'castling_rights': board.castling_rights,
+            'halfmove_clock': board.halfmove_clock
+        }
 
     def _action_to_move(self, action, board):
-        """Конвертирует action в chess.Move"""
         from_pos = action // 64
         to_pos = action % 64
         from_row, from_col = from_pos // 8, from_pos % 8
         to_row, to_col = to_pos // 8, to_pos % 8
-
         from_square = chess.square(from_col, 7 - from_row)
         to_square = chess.square(to_col, 7 - to_row)
-
         promotion = None
         piece = board.piece_at(from_square)
         if piece and piece.piece_type == chess.PAWN:
@@ -100,7 +95,6 @@ class Chess:
             if (piece.color == chess.WHITE and to_rank == 7) or \
                (piece.color == chess.BLACK and to_rank == 0):
                 promotion = chess.QUEEN
-
         return chess.Move(from_square, to_square, promotion=promotion)
 
     def _move_to_action(self, move):
@@ -111,50 +105,28 @@ class Chess:
         return (from_row * 8 + from_col) * 64 + (to_row * 8 + to_col)
 
     def get_next_state(self, state, action, player):
-        """
-        Применяет action к state.
-        state - ОРИГИНАЛЬНЫЙ state (не neutral)
-        action - должен быть в координатах ОРИГИНАЛЬНОГО state
-        player - кто ходит (1 или -1)
-        """
         board = self._state_to_board(state, player)
         move = self._action_to_move(action, board)
-
         if move not in board.legal_moves:
             move_promo = chess.Move(move.from_square, move.to_square, promotion=chess.QUEEN)
             if move_promo in board.legal_moves:
                 move = move_promo
             else:
-                print(f"\n!!! ILLEGAL MOVE DEBUG !!!")
-                print(f"Player: {player}")
-                print(f"Action: {action} = {self.move_to_algebraic(action)}")
-                print(f"Move: {move}")
-                print(f"Board turn: {'WHITE' if board.turn == chess.WHITE else 'BLACK'}")
-                print(f"Board:\n{board}")
-                print(f"Legal moves: {[m.uci() for m in board.legal_moves]}")
                 raise ValueError(f"Illegal move: {move}")
-
         board.push(move)
         return self._board_to_state(board)
 
     def get_valid_moves(self, state, player=1):
-        """
-        Возвращает маску валидных ходов.
-        state должен быть с перспективы текущего игрока (neutral_state).
-        Для neutral_state текущий игрок всегда "положительный" = WHITE.
-        """
-        if len(state.shape) == 3:
-            state = state[0]
-
+        pieces = state['pieces'] if isinstance(state, dict) else state
+        if len(pieces.shape) == 3:
+            pieces = pieces[0]
         board = self._state_to_board(state, player=1)
         valid_moves = np.zeros(self.action_size, dtype=np.uint8)
-
         for move in board.legal_moves:
             if move.promotion and move.promotion != chess.QUEEN:
                 continue
             action = self._move_to_action(move)
             valid_moves[action] = 1
-
         return valid_moves
 
     def check_win(self, state, action):
@@ -167,38 +139,51 @@ class Chess:
     def get_value_and_terminated(self, state, action):
         if action is not None and self.check_win(state, action):
             return 1, True
-
         opponent_state = self.change_perspective(state, -1)
         board = self._state_to_board(opponent_state, player=1)
-
-        if board.is_stalemate():
+        if board.is_stalemate() or board.is_insufficient_material() or board.is_fifty_moves() or board.is_repetition():
             return 0, True
-        if board.is_insufficient_material():
-            return 0, True
-        if board.is_fifty_moves():
-            return 0, True
-
         return 0, False
 
     def flip_action(self, action):
-        """Переворачивает action по вертикали"""
         from_pos = action // 64
         to_pos = action % 64
         from_row, from_col = from_pos // 8, from_pos % 8
         to_row, to_col = to_pos // 8, to_pos % 8
-
         new_from_row = 7 - from_row
         new_to_row = 7 - to_row
-
         new_from_pos = new_from_row * 8 + from_col
         new_to_pos = new_to_row * 8 + to_col
-
         return new_from_pos * 64 + new_to_pos
 
     def change_perspective(self, state, player):
-        if player == -1:
-            return np.flip(state, axis=0) * -1
-        return state.copy()
+        if player == 1:
+            return {k: v for k, v in state.items()} if isinstance(state, dict) else state.copy()
+        pieces = np.flip(state['pieces'], axis=0) * -1 if isinstance(state, dict) else np.flip(state, axis=0) * -1
+        if not isinstance(state, dict):
+            return pieces
+        ep_square = None
+        if state['ep_square'] is not None:
+            file = chess.square_file(state['ep_square'])
+            rank = chess.square_rank(state['ep_square'])
+            new_rank = 7 - rank
+            ep_square = chess.square(file, new_rank)
+        castling = state['castling_rights']
+        new_castling = 0
+        if castling & chess.BB_H1:
+            new_castling |= chess.BB_H8
+        if castling & chess.BB_A1:
+            new_castling |= chess.BB_A8
+        if castling & chess.BB_H8:
+            new_castling |= chess.BB_H1
+        if castling & chess.BB_A8:
+            new_castling |= chess.BB_A1
+        return {
+            'pieces': pieces,
+            'ep_square': ep_square,
+            'castling_rights': new_castling,
+            'halfmove_clock': state['halfmove_clock']
+        }
 
     def get_opponent(self, player):
         return -player
@@ -207,22 +192,36 @@ class Chess:
         return -value
 
     def get_encoded_state(self, state):
+        pieces = state['pieces'] if isinstance(state, dict) else state
         encoded_state = np.stack((
-            (state == self.PAWN).astype(np.float32),
-            (state == self.KNIGHT).astype(np.float32),
-            (state == self.BISHOP).astype(np.float32),
-            (state == self.ROOK).astype(np.float32),
-            (state == self.QUEEN).astype(np.float32),
-            (state == self.KING).astype(np.float32),
-            (state == -self.PAWN).astype(np.float32),
-            (state == -self.KNIGHT).astype(np.float32),
-            (state == -self.BISHOP).astype(np.float32),
-            (state == -self.ROOK).astype(np.float32),
-            (state == -self.QUEEN).astype(np.float32),
-            (state == -self.KING).astype(np.float32),
-            (state == 0).astype(np.float32)
+            (pieces == self.PAWN).astype(np.float32),
+            (pieces == self.KNIGHT).astype(np.float32),
+            (pieces == self.BISHOP).astype(np.float32),
+            (pieces == self.ROOK).astype(np.float32),
+            (pieces == self.QUEEN).astype(np.float32),
+            (pieces == self.KING).astype(np.float32),
+            (pieces == -self.PAWN).astype(np.float32),
+            (pieces == -self.KNIGHT).astype(np.float32),
+            (pieces == -self.BISHOP).astype(np.float32),
+            (pieces == -self.ROOK).astype(np.float32),
+            (pieces == -self.QUEEN).astype(np.float32),
+            (pieces == -self.KING).astype(np.float32),
+            (pieces == 0).astype(np.float32)
         ))
-        if len(state.shape) == 3:
+        if isinstance(state, dict):
+            castling = state['castling_rights']
+            wk = np.full((8, 8), 1.0 if castling & chess.BB_H1 else 0.0)
+            wq = np.full((8, 8), 1.0 if castling & chess.BB_A1 else 0.0)
+            bk = np.full((8, 8), 1.0 if castling & chess.BB_H8 else 0.0)
+            bq = np.full((8, 8), 1.0 if castling & chess.BB_A8 else 0.0)
+            ep_plane = np.zeros((8, 8))
+            if state['ep_square'] is not None:
+                file = chess.square_file(state['ep_square'])
+                ep_plane[:, file] = 1.0
+            halfmove_plane = np.full((8, 8), state['halfmove_clock'] / 100.0)
+            additional = np.stack((wk, wq, bk, bq, ep_plane, halfmove_plane))
+            encoded_state = np.concatenate((encoded_state, additional))
+        if len(pieces.shape) == 3:
             encoded_state = np.swapaxes(encoded_state, 0, 1)
         return encoded_state
 
@@ -250,17 +249,18 @@ class Chess:
         return self.coords_to_action(from_row, from_col, to_row, to_col)
 
     def print_board(self, state):
+        pieces = state['pieces'] if isinstance(state, dict) else state
         symbols = {
             0: '.', self.PAWN: 'P', self.KNIGHT: 'N', self.BISHOP: 'B',
             self.ROOK: 'R', self.QUEEN: 'Q', self.KING: 'K',
-            -self.PAWN: 'p', -self.KNIGHT: 'n', -self.BISHOP: 'b',
-            -self.ROOK: 'r', -self.QUEEN: 'q', -self.KING: 'k'
+            -self.PAWN: 'p', self.KNIGHT: 'n', self.BISHOP: 'b',
+            -self.ROOK: 'r', self.QUEEN: 'q', self.KING: 'k'
         }
         print("  a b c d e f g h")
         for row in range(8):
             print(f"{8 - row} ", end="")
             for col in range(8):
-                print(symbols.get(state[row, col], '?') + " ", end="")
+                print(symbols.get(pieces[row, col], '?') + " ", end="")
             print(f"{8 - row}")
         print("  a b c d e f g h\n")
 
