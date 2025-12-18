@@ -1,65 +1,225 @@
+import chess
 import numpy as np
 
 
 class Chess:
     """
-    Класс игры Шахматы
-    Структура аналогична Checkers, TicTacToe и ConnectFour
+    Класс игры Шахматы с использованием python-chess для валидации ходов.
+    Интерфейс совместим с AlphaZero-style обучением.
     """
 
     # Константы для фигур
     EMPTY = 0
-    PAWN = 1      # Пешка
-    KNIGHT = 2   # Конь
-    BISHOP = 3   # Слон
-    ROOK = 4     # Ладья
-    QUEEN = 5    # Ферзь
-    KING = 6     # Король
+    PAWN = 1
+    KNIGHT = 2
+    BISHOP = 3
+    ROOK = 4
+    QUEEN = 5
+    KING = 6
 
     def __init__(self):
         self.row_count = 8
         self.column_count = 8
-        self.shape_obs = 13  # 6 своих фигур + 6 чужих + пустые
+        self.shape_obs = 13  # 6 своих + 6 чужих + пустые
 
-        # Действие кодируется как: from_pos * 64 + to_pos
-        # Превращение пешки: всегда в ферзя (упрощение)
-        self.action_size = 64 * 64  # 4096 возможных действий
+        # Действие: from_pos * 64 + to_pos (превращение всегда в ферзя)
+        self.action_size = 64 * 64
 
-        # Направления движения для фигур
-        self.ROOK_DIRECTIONS = [(0, 1), (0, -1), (1, 0), (-1, 0)]
-        self.BISHOP_DIRECTIONS = [(1, 1), (1, -1), (-1, 1), (-1, -1)]
-        self.QUEEN_DIRECTIONS = self.ROOK_DIRECTIONS + self.BISHOP_DIRECTIONS
-        self.KNIGHT_MOVES = [
-            (-2, -1), (-2, 1), (-1, -2), (-1, 2),
-            (1, -2), (1, 2), (2, -1), (2, 1)
-        ]
-        self.KING_MOVES = [
-            (-1, -1), (-1, 0), (-1, 1),
-            (0, -1),          (0, 1),
-            (1, -1),  (1, 0), (1, 1)
-        ]
+        # Маппинг между нашими константами и python-chess
+        self._piece_to_chess = {
+            self.PAWN: chess.PAWN,
+            self.KNIGHT: chess.KNIGHT,
+            self.BISHOP: chess.BISHOP,
+            self.ROOK: chess.ROOK,
+            self.QUEEN: chess.QUEEN,
+            self.KING: chess.KING,
+        }
+        self._chess_to_piece = {v: k for k, v in self._piece_to_chess.items()}
 
     def __repr__(self):
         return "Chess"
 
     def get_initial_state(self):
         """
-        Возвращает начальное состояние доски 8x8
-        Белые (положительные) внизу (ряды 6-7), чёрные (отрицательные) вверху (ряды 0-1)
+        Возвращает начальное состояние доски 8x8.
+        Белые (положительные) внизу (ряды 6-7), чёрные (отрицательные) вверху (0-1).
         """
         state = np.zeros((self.row_count, self.column_count), dtype=np.int8)
 
-        # Чёрные фигуры (противник, вверху)
+        # Чёрные (противник, вверху)
         state[0] = [-self.ROOK, -self.KNIGHT, -self.BISHOP, -self.QUEEN,
                     -self.KING, -self.BISHOP, -self.KNIGHT, -self.ROOK]
         state[1] = [-self.PAWN] * 8
 
-        # Белые фигуры (игрок, внизу)
+        # Белые (игрок, внизу)
         state[6] = [self.PAWN] * 8
         state[7] = [self.ROOK, self.KNIGHT, self.BISHOP, self.QUEEN,
                     self.KING, self.BISHOP, self.KNIGHT, self.ROOK]
 
         return state
+
+    # ==================== Методы конвертации ====================
+
+    def _state_to_board(self, state):
+        """Конвертирует numpy state в chess.Board"""
+        board = chess.Board(fen=None)
+        board.clear()
+
+        for row in range(8):
+            for col in range(8):
+                piece_val = state[row, col]
+                if piece_val != 0:
+                    piece_type = self._piece_to_chess[abs(piece_val)]
+                    color = chess.WHITE if piece_val > 0 else chess.BLACK
+                    square = chess.square(col, 7 - row)
+                    board.set_piece_at(square, chess.Piece(piece_type, color))
+
+        # Положительные фигуры = WHITE, они ходят
+        board.turn = chess.WHITE
+
+        # Права рокировки на основе позиций фигур
+        # (упрощение: если фигуры на местах, рокировка разрешена)
+        board.castling_rights = chess.BB_EMPTY
+
+        # Для текущего игрока (положительные = WHITE)
+        if state[7, 4] == self.KING:
+            if state[7, 7] == self.ROOK:
+                board.castling_rights |= chess.BB_H1
+            if state[7, 0] == self.ROOK:
+                board.castling_rights |= chess.BB_A1
+
+        # Для противника (отрицательные = BLACK)
+        if state[0, 4] == -self.KING:
+            if state[0, 7] == -self.ROOK:
+                board.castling_rights |= chess.BB_H8
+            if state[0, 0] == -self.ROOK:
+                board.castling_rights |= chess.BB_A8
+
+        return board
+
+    def _board_to_state(self, board):
+        """Конвертирует chess.Board в numpy state"""
+        state = np.zeros((8, 8), dtype=np.int8)
+
+        for square in chess.SQUARES:
+            piece = board.piece_at(square)
+            if piece:
+                row = 7 - chess.square_rank(square)
+                col = chess.square_file(square)
+                value = self._chess_to_piece[piece.piece_type]
+                if piece.color == chess.BLACK:
+                    value = -value
+                state[row, col] = value
+
+        return state
+
+    def _coords_to_square(self, row, col):
+        """Конвертирует координаты (row, col) в chess.Square"""
+        return chess.square(col, 7 - row)
+
+    def _square_to_coords(self, square):
+        """Конвертирует chess.Square в координаты (row, col)"""
+        return (7 - chess.square_rank(square), chess.square_file(square))
+
+    def _action_to_move(self, action, board):
+        """Конвертирует action в chess.Move"""
+        from_pos = action // 64
+        to_pos = action % 64
+        from_row, from_col = from_pos // 8, from_pos % 8
+        to_row, to_col = to_pos // 8, to_pos % 8
+
+        from_square = self._coords_to_square(from_row, from_col)
+        to_square = self._coords_to_square(to_row, to_col)
+
+        # Проверяем превращение пешки
+        promotion = None
+        piece = board.piece_at(from_square)
+        if piece and piece.piece_type == chess.PAWN:
+            to_rank = chess.square_rank(to_square)
+            if (piece.color == chess.WHITE and to_rank == 7) or \
+               (piece.color == chess.BLACK and to_rank == 0):
+                promotion = chess.QUEEN  # Всегда в ферзя
+
+        return chess.Move(from_square, to_square, promotion=promotion)
+
+    def _move_to_action(self, move):
+        """Конвертирует chess.Move в action"""
+        from_row, from_col = self._square_to_coords(move.from_square)
+        to_row, to_col = self._square_to_coords(move.to_square)
+        from_pos = from_row * 8 + from_col
+        to_pos = to_row * 8 + to_col
+        return from_pos * 64 + to_pos
+
+    # ==================== Основные методы игры ====================
+
+    def get_valid_moves(self, state):
+        """
+        Возвращает маску допустимых ходов размером action_size.
+        Использует python-chess для полной валидации (шах, рокировка и т.д.).
+        """
+        if len(state.shape) == 3:
+            state = state[0]
+
+        board = self._state_to_board(state)
+        valid_moves = np.zeros(self.action_size, dtype=np.uint8)
+
+        for move in board.legal_moves:
+            # Пропускаем превращения не в ферзя
+            if move.promotion and move.promotion != chess.QUEEN:
+                continue
+            action = self._move_to_action(move)
+            valid_moves[action] = 1
+
+        return valid_moves
+
+    def get_next_state(self, state, action, player):
+        """Применяет действие и возвращает новое состояние"""
+        board = self._state_to_board(state)
+        move = self._action_to_move(action, board)
+        board.push(move)
+        return self._board_to_state(board)
+
+    def check_win(self, state, action):
+        """
+        Проверяет победу после хода.
+        Победа если противник получил мат.
+        """
+        if action is None:
+            return False
+
+        # Проверяем состояние противника
+        opponent_state = self.change_perspective(state, -1)
+        board = self._state_to_board(opponent_state)
+
+        return board.is_checkmate()
+
+    def get_value_and_terminated(self, state, action):
+        """
+        Возвращает (value, terminated).
+        value = 1 при победе (мат), 0 при ничьей.
+        """
+        # Проверяем мат противнику
+        if self.check_win(state, action):
+            return 1, True
+
+        # Проверяем состояние противника для пата и других ничьих
+        opponent_state = self.change_perspective(state, -1)
+        board = self._state_to_board(opponent_state)
+
+        # Пат
+        if board.is_stalemate():
+            return 0, True
+
+        # Недостаток материала
+        if board.is_insufficient_material():
+            return 0, True
+
+        # Дополнительная проверка: только два короля
+        pieces = [p for p in board.piece_map().values()]
+        if len(pieces) == 2:
+            return 0, True
+
+        return 0, False
 
     def flip_action(self, action):
         """Переворачивает action после change_perspective"""
@@ -77,305 +237,11 @@ class Chess:
 
         return new_from_pos * 64 + new_to_pos
 
-    def get_next_state(self, state, action, player):
-        """
-        Применяет действие к состоянию и возвращает новое состояние.
-        Состояние должно быть с перспективы player (после change_perspective).
-        """
-        state = state.copy()
-
-        from_pos = action // 64
-        to_pos = action % 64
-
-        from_row, from_col = from_pos // 8, from_pos % 8
-        to_row, to_col = to_pos // 8, to_pos % 8
-
-        piece = state[from_row, from_col]
-        state[from_row, from_col] = 0
-
-        # Превращение пешки (достигла верхнего края)
-        if piece == self.PAWN and to_row == 0:
-            state[to_row, to_col] = self.QUEEN  # Всегда превращаем в ферзя
-        # Рокировка (король двигается на 2 клетки)
-        elif abs(piece) == self.KING and abs(to_col - from_col) == 2:
-            state[to_row, to_col] = piece
-            # Перемещаем ладью
-            if to_col > from_col:  # Короткая рокировка (вправо)
-                state[to_row, 5] = state[to_row, 7]
-                state[to_row, 7] = 0
-            else:  # Длинная рокировка (влево)
-                state[to_row, 3] = state[to_row, 0]
-                state[to_row, 0] = 0
-        else:
-            state[to_row, to_col] = piece
-
-        return state
-
-    def get_valid_moves(self, state):
-        """
-        Возвращает маску допустимых ходов размером action_size.
-        Предполагается что state с перспективы текущего игрока (player=1).
-        Фильтрует ходы, которые оставляют короля под шахом.
-        """
-        if len(state.shape) == 3:
-            state = state[0]
-
-        valid_moves = np.zeros(self.action_size, dtype=np.uint8)
-
-        for row in range(self.row_count):
-            for col in range(self.column_count):
-                piece = state[row, col]
-
-                # Ищем только свои фигуры (положительные)
-                if piece <= 0:
-                    continue
-
-                # Получаем все псевдо-легальные ходы для фигуры
-                moves = self._get_piece_moves(state, row, col, piece)
-
-                for to_row, to_col in moves:
-                    action = self.coords_to_action(row, col, to_row, to_col)
-
-                    # Проверяем, не оставляет ли ход короля под шахом
-                    if not self._leaves_king_in_check(state, row, col, to_row, to_col):
-                        valid_moves[action] = 1
-
-        return valid_moves
-
-    def _get_piece_moves(self, state, row, col, piece):
-        """Возвращает список псевдо-легальных ходов для фигуры (без проверки шаха)"""
-        moves = []
-
-        if piece == self.PAWN:
-            moves = self._get_pawn_moves(state, row, col)
-        elif piece == self.KNIGHT:
-            moves = self._get_knight_moves(state, row, col)
-        elif piece == self.BISHOP:
-            moves = self._get_sliding_moves(state, row, col, self.BISHOP_DIRECTIONS)
-        elif piece == self.ROOK:
-            moves = self._get_sliding_moves(state, row, col, self.ROOK_DIRECTIONS)
-        elif piece == self.QUEEN:
-            moves = self._get_sliding_moves(state, row, col, self.QUEEN_DIRECTIONS)
-        elif piece == self.KING:
-            moves = self._get_king_moves(state, row, col)
-
-        return moves
-
-    def _get_pawn_moves(self, state, row, col):
-        """Ходы пешки (игрок всегда идёт вверх, row уменьшается)"""
-        moves = []
-
-        # Ход вперёд на 1
-        if row > 0 and state[row - 1, col] == 0:
-            moves.append((row - 1, col))
-
-            # Ход вперёд на 2 с начальной позиции
-            if row == 6 and state[row - 2, col] == 0:
-                moves.append((row - 2, col))
-
-        # Взятие по диагонали
-        for dc in [-1, 1]:
-            new_col = col + dc
-            if 0 <= new_col < 8 and row > 0:
-                target = state[row - 1, new_col]
-                if target < 0:  # Фигура противника
-                    moves.append((row - 1, new_col))
-
-        return moves
-
-    def _get_knight_moves(self, state, row, col):
-        """Ходы коня"""
-        moves = []
-        for dr, dc in self.KNIGHT_MOVES:
-            new_row, new_col = row + dr, col + dc
-            if self._is_valid_position(new_row, new_col):
-                target = state[new_row, new_col]
-                if target <= 0:  # Пусто или фигура противника
-                    moves.append((new_row, new_col))
-        return moves
-
-    def _get_sliding_moves(self, state, row, col, directions):
-        """Ходы скользящих фигур (слон, ладья, ферзь)"""
-        moves = []
-        for dr, dc in directions:
-            for dist in range(1, 8):
-                new_row, new_col = row + dr * dist, col + dc * dist
-                if not self._is_valid_position(new_row, new_col):
-                    break
-                target = state[new_row, new_col]
-                if target == 0:
-                    moves.append((new_row, new_col))
-                elif target < 0:  # Фигура противника - можно взять
-                    moves.append((new_row, new_col))
-                    break
-                else:  # Своя фигура - стоп
-                    break
-        return moves
-
-    def _get_king_moves(self, state, row, col):
-        """Ходы короля включая рокировку"""
-        moves = []
-
-        # Обычные ходы
-        for dr, dc in self.KING_MOVES:
-            new_row, new_col = row + dr, col + dc
-            if self._is_valid_position(new_row, new_col):
-                target = state[new_row, new_col]
-                if target <= 0:  # Пусто или фигура противника
-                    moves.append((new_row, new_col))
-
-        # Рокировка (упрощённая проверка - король на начальной позиции)
-        if row == 7 and col == 4:
-            # Короткая рокировка
-            if (state[7, 5] == 0 and state[7, 6] == 0 and
-                state[7, 7] == self.ROOK):
-                # Проверяем, что король не под шахом и не проходит через шах
-                if (not self._is_square_attacked(state, 7, 4) and
-                    not self._is_square_attacked(state, 7, 5) and
-                    not self._is_square_attacked(state, 7, 6)):
-                    moves.append((7, 6))
-
-            # Длинная рокировка
-            if (state[7, 3] == 0 and state[7, 2] == 0 and
-                state[7, 1] == 0 and state[7, 0] == self.ROOK):
-                if (not self._is_square_attacked(state, 7, 4) and
-                    not self._is_square_attacked(state, 7, 3) and
-                    not self._is_square_attacked(state, 7, 2)):
-                    moves.append((7, 2))
-
-        return moves
-
-    def _is_square_attacked(self, state, row, col):
-        """Проверяет, атакуется ли клетка противником"""
-
-        # Атака пешкой (противник идёт вниз, значит атакует сверху)
-        for dc in [-1, 1]:
-            r, c = row - 1, col + dc
-            if self._is_valid_position(r, c) and state[r, c] == -self.PAWN:
-                return True
-
-        # Атака конём
-        for dr, dc in self.KNIGHT_MOVES:
-            r, c = row + dr, col + dc
-            if self._is_valid_position(r, c) and state[r, c] == -self.KNIGHT:
-                return True
-
-        # Атака королём
-        for dr, dc in self.KING_MOVES:
-            r, c = row + dr, col + dc
-            if self._is_valid_position(r, c) and state[r, c] == -self.KING:
-                return True
-
-        # Атака по диагонали (слон, ферзь)
-        for dr, dc in self.BISHOP_DIRECTIONS:
-            for dist in range(1, 8):
-                r, c = row + dr * dist, col + dc * dist
-                if not self._is_valid_position(r, c):
-                    break
-                piece = state[r, c]
-                if piece == -self.BISHOP or piece == -self.QUEEN:
-                    return True
-                if piece != 0:
-                    break
-
-        # Атака по прямой (ладья, ферзь)
-        for dr, dc in self.ROOK_DIRECTIONS:
-            for dist in range(1, 8):
-                r, c = row + dr * dist, col + dc * dist
-                if not self._is_valid_position(r, c):
-                    break
-                piece = state[r, c]
-                if piece == -self.ROOK or piece == -self.QUEEN:
-                    return True
-                if piece != 0:
-                    break
-
-        return False
-
-    def _find_king(self, state, player_sign=1):
-        """Находит позицию короля"""
-        king_value = self.KING * player_sign
-        positions = np.where(state == king_value)
-        if len(positions[0]) > 0:
-            return positions[0][0], positions[1][0]
-        return None
-
-    def _leaves_king_in_check(self, state, from_row, from_col, to_row, to_col):
-        """Проверяет, оставляет ли ход своего короля под шахом"""
-        # Симулируем ход
-        temp_state = state.copy()
-        piece = temp_state[from_row, from_col]
-        temp_state[from_row, from_col] = 0
-        temp_state[to_row, to_col] = piece
-
-        # Рокировка - двигаем ладью тоже
-        if abs(piece) == self.KING and abs(to_col - from_col) == 2:
-            if to_col > from_col:  # Короткая
-                temp_state[to_row, 5] = temp_state[to_row, 7]
-                temp_state[to_row, 7] = 0
-            else:  # Длинная
-                temp_state[to_row, 3] = temp_state[to_row, 0]
-                temp_state[to_row, 0] = 0
-
-        # Находим короля
-        king_pos = self._find_king(temp_state, 1)
-        if king_pos is None:
-            return True
-
-        return self._is_square_attacked(temp_state, king_pos[0], king_pos[1])
-
-    def _is_in_check(self, state):
-        """Проверяет, находится ли текущий игрок под шахом"""
-        king_pos = self._find_king(state, 1)
-        if king_pos is None:
-            return True
-        return self._is_square_attacked(state, king_pos[0], king_pos[1])
-
-    def check_win(self, state, action):
-        """
-        Проверяет победу после хода.
-        Победа если противник получил мат (под шахом и нет ходов).
-        """
-        if action is None:
-            return False
-
-        # Меняем перспективу чтобы проверить состояние противника
-        opponent_state = self.change_perspective(state, -1)
-
-        # Проверяем есть ли у противника допустимые ходы
-        opponent_moves = self.get_valid_moves(opponent_state)
-        if np.sum(opponent_moves) == 0:
-            # Нет ходов - это мат или пат
-            if self._is_in_check(opponent_state):
-                return True  # Мат - победа!
-
-        return False
-
-    def get_value_and_terminated(self, state, action):
-        """
-        Возвращает (value, terminated).
-        value = 1 при победе (мат), 0 при ничьей (пат) или продолжении.
-        """
-        if self.check_win(state, action):
-            return 1, True
-
-        # Проверяем пат (нет ходов, но не под шахом)
-        valid_moves = self.get_valid_moves(state)
-        if np.sum(valid_moves) == 0:
-            if not self._is_in_check(state):
-                return 0, True  # Пат - ничья
-            else:
-                # Текущий игрок в мате - но это значит предыдущий победил
-                # Это не должно происходить если логика правильная
-                return -1, True
-
-        # Проверка на недостаток материала (упрощённая)
-        # Король против короля
-        pieces = state[state != 0]
-        if len(pieces) == 2:  # Только два короля
-            return 0, True
-
-        return 0, False
+    def change_perspective(self, state, player):
+        """Меняет перспективу доски для игрока"""
+        if player == -1:
+            return np.flip(state, axis=0) * -1
+        return state.copy()
 
     def get_opponent(self, player):
         """Возвращает противника"""
@@ -385,38 +251,25 @@ class Chess:
         """Возвращает значение с точки зрения противника"""
         return -value
 
-    def change_perspective(self, state, player):
-        """
-        Меняет перспективу доски для игрока.
-        Переворачивает доску и инвертирует знаки фигур.
-        """
-        if player == -1:
-            return np.flip(state, axis=0) * -1
-        return state.copy()
-
     def get_encoded_state(self, state):
         """
-        Кодирует состояние для нейронной сети.
-        Возвращает 13 каналов:
-        - 6 каналов для своих фигур (P, N, B, R, Q, K)
-        - 6 каналов для фигур противника
-        - 1 канал для пустых клеток
+        Кодирует состояние для нейронной сети (13 каналов).
         """
         encoded_state = np.stack(
             (
-                (state == self.PAWN).astype(np.float32),    # Мои пешки
-                (state == self.KNIGHT).astype(np.float32),  # Мои кони
-                (state == self.BISHOP).astype(np.float32),  # Мои слоны
-                (state == self.ROOK).astype(np.float32),    # Мои ладьи
-                (state == self.QUEEN).astype(np.float32),   # Мой ферзь
-                (state == self.KING).astype(np.float32),    # Мой король
-                (state == -self.PAWN).astype(np.float32),   # Пешки противника
-                (state == -self.KNIGHT).astype(np.float32), # Кони противника
-                (state == -self.BISHOP).astype(np.float32), # Слоны противника
-                (state == -self.ROOK).astype(np.float32),   # Ладьи противника
-                (state == -self.QUEEN).astype(np.float32),  # Ферзь противника
-                (state == -self.KING).astype(np.float32),   # Король противника
-                (state == 0).astype(np.float32)             # Пустые клетки
+                (state == self.PAWN).astype(np.float32),
+                (state == self.KNIGHT).astype(np.float32),
+                (state == self.BISHOP).astype(np.float32),
+                (state == self.ROOK).astype(np.float32),
+                (state == self.QUEEN).astype(np.float32),
+                (state == self.KING).astype(np.float32),
+                (state == -self.PAWN).astype(np.float32),
+                (state == -self.KNIGHT).astype(np.float32),
+                (state == -self.BISHOP).astype(np.float32),
+                (state == -self.ROOK).astype(np.float32),
+                (state == -self.QUEEN).astype(np.float32),
+                (state == -self.KING).astype(np.float32),
+                (state == 0).astype(np.float32)
             )
         )
 
@@ -425,18 +278,16 @@ class Chess:
 
         return encoded_state
 
-    def _is_valid_position(self, row, col):
-        """Проверяет, находится ли позиция в пределах доски"""
-        return 0 <= row < self.row_count and 0 <= col < self.column_count
+    # ==================== Вспомогательные методы ====================
 
     def action_to_coords(self, action):
-        """Декодирует действие в координаты (from_row, from_col, to_row, to_col)"""
+        """Декодирует action в (from_row, from_col, to_row, to_col)"""
         from_pos = action // 64
         to_pos = action % 64
         return (from_pos // 8, from_pos % 8, to_pos // 8, to_pos % 8)
 
     def coords_to_action(self, from_row, from_col, to_row, to_col):
-        """Кодирует координаты в действие"""
+        """Кодирует координаты в action"""
         from_pos = from_row * 8 + from_col
         to_pos = to_row * 8 + to_col
         return from_pos * 64 + to_pos
@@ -461,7 +312,7 @@ class Chess:
         print()
 
     def move_to_algebraic(self, action):
-        """Конвертирует action в алгебраическую нотацию"""
+        """Конвертирует action в алгебраическую нотацию (e2e4)"""
         from_row, from_col, to_row, to_col = self.action_to_coords(action)
         files = 'abcdefgh'
         ranks = '87654321'
@@ -476,3 +327,20 @@ class Chess:
         to_col = files.index(notation[2])
         to_row = ranks.index(notation[3])
         return self.coords_to_action(from_row, from_col, to_row, to_col)
+
+    # ==================== Дополнительные методы для FEN ====================
+
+    def state_to_fen(self, state):
+        """Конвертирует state в FEN строку (для отладки/экспорта)"""
+        board = self._state_to_board(state)
+        return board.fen()
+
+    def fen_to_state(self, fen):
+        """Конвертирует FEN строку в state"""
+        board = chess.Board(fen)
+        return self._board_to_state(board)
+
+    def is_in_check(self, state):
+        """Проверяет, находится ли текущий игрок под шахом"""
+        board = self._state_to_board(state)
+        return board.is_check()
