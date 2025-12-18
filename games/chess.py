@@ -3,9 +3,7 @@ import numpy as np
 
 
 class Chess:
-    """
-    Класс игры Шахматы с использованием python-chess.
-    """
+    """Класс игры Шахматы с python-chess"""
 
     EMPTY = 0
     PAWN = 1
@@ -22,12 +20,9 @@ class Chess:
         self.action_size = 64 * 64
 
         self._piece_to_chess = {
-            self.PAWN: chess.PAWN,
-            self.KNIGHT: chess.KNIGHT,
-            self.BISHOP: chess.BISHOP,
-            self.ROOK: chess.ROOK,
-            self.QUEEN: chess.QUEEN,
-            self.KING: chess.KING,
+            self.PAWN: chess.PAWN, self.KNIGHT: chess.KNIGHT,
+            self.BISHOP: chess.BISHOP, self.ROOK: chess.ROOK,
+            self.QUEEN: chess.QUEEN, self.KING: chess.KING,
         }
         self._chess_to_piece = {v: k for k, v in self._piece_to_chess.items()}
 
@@ -35,7 +30,6 @@ class Chess:
         return "Chess"
 
     def get_initial_state(self):
-        """Начальное состояние: белые внизу (положительные), чёрные вверху (отрицательные)"""
         state = np.zeros((8, 8), dtype=np.int8)
         state[0] = [-self.ROOK, -self.KNIGHT, -self.BISHOP, -self.QUEEN,
                     -self.KING, -self.BISHOP, -self.KNIGHT, -self.ROOK]
@@ -45,13 +39,8 @@ class Chess:
                     self.KING, self.BISHOP, self.KNIGHT, self.ROOK]
         return state
 
-    # ==================== Конвертация ====================
-
     def _state_to_board(self, state, player=1):
-        """
-        Конвертирует numpy state в chess.Board.
-        player указывает кто сейчас ходит.
-        """
+        """Конвертирует state в chess.Board"""
         board = chess.Board(fen=None)
         board.clear()
 
@@ -64,32 +53,25 @@ class Chess:
                     square = chess.square(col, 7 - row)
                     board.set_piece_at(square, chess.Piece(piece_type, color))
 
-        # Устанавливаем чей ход
         board.turn = chess.WHITE if player == 1 else chess.BLACK
 
         # Права рокировки
         board.castling_rights = chess.BB_EMPTY
-
-        # Белые рокировки
-        if state[7, 4] == self.KING:  # Король на e1
-            if state[7, 7] == self.ROOK:  # Ладья на h1
+        if state[7, 4] == self.KING:
+            if state[7, 7] == self.ROOK:
                 board.castling_rights |= chess.BB_H1
-            if state[7, 0] == self.ROOK:  # Ладья на a1
+            if state[7, 0] == self.ROOK:
                 board.castling_rights |= chess.BB_A1
-
-        # Чёрные рокировки
-        if state[0, 4] == -self.KING:  # Король на e8
-            if state[0, 7] == -self.ROOK:  # Ладья на h8
+        if state[0, 4] == -self.KING:
+            if state[0, 7] == -self.ROOK:
                 board.castling_rights |= chess.BB_H8
-            if state[0, 0] == -self.ROOK:  # Ладья на a8
+            if state[0, 0] == -self.ROOK:
                 board.castling_rights |= chess.BB_A8
 
         return board
 
     def _board_to_state(self, board):
-        """Конвертирует chess.Board в numpy state"""
         state = np.zeros((8, 8), dtype=np.int8)
-
         for square in chess.SQUARES:
             piece = board.piece_at(square)
             if piece:
@@ -99,7 +81,6 @@ class Chess:
                 if piece.color == chess.BLACK:
                     value = -value
                 state[row, col] = value
-
         return state
 
     def _action_to_move(self, action, board):
@@ -112,48 +93,45 @@ class Chess:
         from_square = chess.square(from_col, 7 - from_row)
         to_square = chess.square(to_col, 7 - to_row)
 
-        # Проверяем превращение пешки
         promotion = None
         piece = board.piece_at(from_square)
         if piece and piece.piece_type == chess.PAWN:
             to_rank = chess.square_rank(to_square)
             if (piece.color == chess.WHITE and to_rank == 7) or \
-                    (piece.color == chess.BLACK and to_rank == 0):
+               (piece.color == chess.BLACK and to_rank == 0):
                 promotion = chess.QUEEN
 
         return chess.Move(from_square, to_square, promotion=promotion)
 
     def _move_to_action(self, move):
-        """Конвертирует chess.Move в action"""
         from_row = 7 - chess.square_rank(move.from_square)
         from_col = chess.square_file(move.from_square)
         to_row = 7 - chess.square_rank(move.to_square)
         to_col = chess.square_file(move.to_square)
         return (from_row * 8 + from_col) * 64 + (to_row * 8 + to_col)
 
-    # ==================== Основные методы ====================
-
     def get_next_state(self, state, action, player):
         """
         Применяет action к state.
-
-        ВАЖНО: action должен быть в координатах оригинального state,
-        то есть если player=-1, action должен быть уже перевёрнут через flip_action.
+        state - ОРИГИНАЛЬНЫЙ state (не neutral)
+        action - должен быть в координатах ОРИГИНАЛЬНОГО state
+        player - кто ходит (1 или -1)
         """
         board = self._state_to_board(state, player)
         move = self._action_to_move(action, board)
 
-        # Проверяем легальность
         if move not in board.legal_moves:
-            # Пробуем с превращением
-            move_with_promo = chess.Move(move.from_square, move.to_square, promotion=chess.QUEEN)
-            if move_with_promo in board.legal_moves:
-                move = move_with_promo
+            move_promo = chess.Move(move.from_square, move.to_square, promotion=chess.QUEEN)
+            if move_promo in board.legal_moves:
+                move = move_promo
             else:
-                # Для отладки
-                print(f"ERROR: Illegal move {move} for player {player}")
+                print(f"\n!!! ILLEGAL MOVE DEBUG !!!")
+                print(f"Player: {player}")
+                print(f"Action: {action} = {self.move_to_algebraic(action)}")
+                print(f"Move: {move}")
+                print(f"Board turn: {'WHITE' if board.turn == chess.WHITE else 'BLACK'}")
                 print(f"Board:\n{board}")
-                print(f"Legal moves: {list(board.legal_moves)}")
+                print(f"Legal moves: {[m.uci() for m in board.legal_moves]}")
                 raise ValueError(f"Illegal move: {move}")
 
         board.push(move)
@@ -162,14 +140,12 @@ class Chess:
     def get_valid_moves(self, state, player=1):
         """
         Возвращает маску валидных ходов.
-
-        state - состояние с перспективы player (после change_perspective)
-        Для MCTS это neutral_state где текущий игрок положительный.
+        state должен быть с перспективы текущего игрока (neutral_state).
+        Для neutral_state текущий игрок всегда "положительный" = WHITE.
         """
         if len(state.shape) == 3:
             state = state[0]
 
-        # Для neutral state текущий игрок всегда положительный = WHITE
         board = self._state_to_board(state, player=1)
         valid_moves = np.zeros(self.action_size, dtype=np.uint8)
 
@@ -182,51 +158,32 @@ class Chess:
         return valid_moves
 
     def check_win(self, state, action):
-        """Проверяет победу после хода (мат противнику)"""
         if action is None:
             return False
-
-        # После хода проверяем состояние с точки зрения противника
         opponent_state = self.change_perspective(state, -1)
         board = self._state_to_board(opponent_state, player=1)
-
         return board.is_checkmate()
 
     def get_value_and_terminated(self, state, action):
-        """
-        Проверяет окончание игры.
-        Вызывается ПОСЛЕ применения хода.
-        state - результат get_next_state
-        """
-        # Проверяем мат противнику
         if action is not None and self.check_win(state, action):
             return 1, True
 
-        # Проверяем состояние для следующего хода
-        # После get_next_state ходит противник, но state ещё не перевёрнут
-        # Нужно проверить может ли противник ходить
         opponent_state = self.change_perspective(state, -1)
         board = self._state_to_board(opponent_state, player=1)
 
         if board.is_stalemate():
             return 0, True
-
         if board.is_insufficient_material():
             return 0, True
-
-        # Правило 50 ходов (опционально)
         if board.is_fifty_moves():
             return 0, True
-
-        # Троекратное повторение (сложнее отследить без истории)
 
         return 0, False
 
     def flip_action(self, action):
-        """Переворачивает action (зеркально по вертикали)"""
+        """Переворачивает action по вертикали"""
         from_pos = action // 64
         to_pos = action % 64
-
         from_row, from_col = from_pos // 8, from_pos % 8
         to_row, to_col = to_pos // 8, to_pos % 8
 
@@ -239,7 +196,6 @@ class Chess:
         return new_from_pos * 64 + new_to_pos
 
     def change_perspective(self, state, player):
-        """Меняет перспективу: переворачивает доску и знаки фигур"""
         if player == -1:
             return np.flip(state, axis=0) * -1
         return state.copy()
@@ -251,31 +207,24 @@ class Chess:
         return -value
 
     def get_encoded_state(self, state):
-        """Кодирует состояние для нейронной сети (13 каналов)"""
-        encoded_state = np.stack(
-            (
-                (state == self.PAWN).astype(np.float32),
-                (state == self.KNIGHT).astype(np.float32),
-                (state == self.BISHOP).astype(np.float32),
-                (state == self.ROOK).astype(np.float32),
-                (state == self.QUEEN).astype(np.float32),
-                (state == self.KING).astype(np.float32),
-                (state == -self.PAWN).astype(np.float32),
-                (state == -self.KNIGHT).astype(np.float32),
-                (state == -self.BISHOP).astype(np.float32),
-                (state == -self.ROOK).astype(np.float32),
-                (state == -self.QUEEN).astype(np.float32),
-                (state == -self.KING).astype(np.float32),
-                (state == 0).astype(np.float32)
-            )
-        )
-
+        encoded_state = np.stack((
+            (state == self.PAWN).astype(np.float32),
+            (state == self.KNIGHT).astype(np.float32),
+            (state == self.BISHOP).astype(np.float32),
+            (state == self.ROOK).astype(np.float32),
+            (state == self.QUEEN).astype(np.float32),
+            (state == self.KING).astype(np.float32),
+            (state == -self.PAWN).astype(np.float32),
+            (state == -self.KNIGHT).astype(np.float32),
+            (state == -self.BISHOP).astype(np.float32),
+            (state == -self.ROOK).astype(np.float32),
+            (state == -self.QUEEN).astype(np.float32),
+            (state == -self.KING).astype(np.float32),
+            (state == 0).astype(np.float32)
+        ))
         if len(state.shape) == 3:
             encoded_state = np.swapaxes(encoded_state, 0, 1)
-
         return encoded_state
-
-    # ==================== Вспомогательные методы ====================
 
     def action_to_coords(self, action):
         from_pos = action // 64
@@ -283,9 +232,7 @@ class Chess:
         return (from_pos // 8, from_pos % 8, to_pos // 8, to_pos % 8)
 
     def coords_to_action(self, from_row, from_col, to_row, to_col):
-        from_pos = from_row * 8 + from_col
-        to_pos = to_row * 8 + to_col
-        return from_pos * 64 + to_pos
+        return (from_row * 8 + from_col) * 64 + (to_row * 8 + to_col)
 
     def move_to_algebraic(self, action):
         from_row, from_col, to_row, to_col = self.action_to_coords(action)
@@ -304,13 +251,11 @@ class Chess:
 
     def print_board(self, state):
         symbols = {
-            0: '.',
-            self.PAWN: 'P', self.KNIGHT: 'N', self.BISHOP: 'B',
+            0: '.', self.PAWN: 'P', self.KNIGHT: 'N', self.BISHOP: 'B',
             self.ROOK: 'R', self.QUEEN: 'Q', self.KING: 'K',
             -self.PAWN: 'p', -self.KNIGHT: 'n', -self.BISHOP: 'b',
             -self.ROOK: 'r', -self.QUEEN: 'q', -self.KING: 'k'
         }
-
         print("  a b c d e f g h")
         for row in range(8):
             print(f"{8 - row} ", end="")
@@ -320,9 +265,4 @@ class Chess:
         print("  a b c d e f g h\n")
 
     def state_to_fen(self, state, player=1):
-        board = self._state_to_board(state, player)
-        return board.fen()
-
-    def fen_to_state(self, fen):
-        board = chess.Board(fen)
-        return self._board_to_state(board)
+        return self._state_to_board(state, player).fen()

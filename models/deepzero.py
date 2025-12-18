@@ -151,26 +151,12 @@ class DeepZero:
 
 
 class DeepZeroParallel:
-    def __init__(self, model, optimizer, game, args, log_dir=None):
+    def __init__(self, model, optimizer, game, args):
         self.model = model
         self.optimizer = optimizer
         self.game = game
         self.args = args
         self.mcts = MCTSParallel(game, args, model)
-
-        # TensorBoard setup
-        if log_dir is None:
-            log_dir = f"runs/{game}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        self.writer = SummaryWriter(log_dir)
-        self.global_step = 0
-        self.train_step = 0
-
-        # Метрики для отслеживания
-        self.game_lengths = []
-        self.game_outcomes = []  # 1 = белые выиграли, -1 = чёрные, 0 = ничья
-
-        # Логируем гиперпараметры
-        self.writer.add_text('hyperparameters', str(args), 0)
 
     def selfPlay(self):
         return_memory = []
@@ -178,18 +164,20 @@ class DeepZeroParallel:
         spGames = [SPG(self.game) for _ in range(self.args['num_parallel_games'])]
 
         while len(spGames) > 0:
+            # Собираем ОРИГИНАЛЬНЫЕ states
             states = np.stack([spg.state for spg in spGames])
 
-            # Меняем перспективу для MCTS (текущий игрок становится положительным)
+            # Меняем перспективу для MCTS
+            # neutral_states: текущий игрок видит свои фигуры как положительные
             neutral_states = self.game.change_perspective(states, player)
 
-            # MCTS работает с neutral_states
+            # MCTS работает с neutral_states (всегда как будто ходит player=1)
             self.mcts.search(neutral_states, spGames)
 
             for i in range(len(spGames) - 1, -1, -1):
                 spg = spGames[i]
 
-                # Собираем распределение визитов
+                # action_probs из MCTS - в координатах neutral_state
                 action_probs = np.zeros(self.game.action_size, dtype=np.float64)
                 for child in spg.root.children:
                     action_probs[child.action_taken] = child.visit_count
@@ -222,26 +210,33 @@ class DeepZeroParallel:
                     action_probs = valid_moves.astype(np.float64)
                     action_probs = normalize_probs(action_probs)
 
-                # Сохраняем neutral state и action_probs (для neutral perspective)
-                spg.memory.append((spg.root.state, action_probs, player))
+                # Сохраняем neutral_state и action_probs (в neutral координатах)
+                # spg.root.state = neutral_states[i] (из MCTS)
+                spg.memory.append((neutral_state_i.copy(), action_probs.copy(), player))
 
-                # Температурная обработка
+                # Температурная выборка
                 temperature_action_probs = action_probs ** (1.0 / self.args['temperature'])
                 temperature_action_probs = normalize_probs(temperature_action_probs)
 
-                # Выбираем action (в neutral координатах)
-                neutral_action = np.random.choice(self.game.action_size, p=temperature_action_probs)
+                # Выбираем action в NEUTRAL координатах
+                neutral_action = np.random.choice(
+                    self.game.action_size,
+                    p=temperature_action_probs
+                )
 
-                # ============ КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ ============
-                # Action из MCTS в координатах neutral_state
-                # Для применения к оригинальному state нужно перевернуть если player == -1
-                if player == -1:
-                    action = self.game.flip_action(neutral_action)
-                else:
+                # ===============================================
+                # КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ!
+                # neutral_action - это ход в координатах neutral_state
+                # Для применения к ОРИГИНАЛЬНОМУ state нужно:
+                # - если player=1 (белые): action = neutral_action (без изменений)
+                # - если player=-1 (чёрные): action = flip(neutral_action)
+                # ===============================================
+                if player == 1:
                     action = neutral_action
-                # ================================================
+                else:
+                    action = self.game.flip_action(neutral_action)
 
-                # Применяем к оригинальному state
+                # Применяем к ОРИГИНАЛЬНОМУ state
                 spg.state = self.game.get_next_state(spg.state, action, player)
 
                 value, is_terminal = self.game.get_value_and_terminated(spg.state, action)
@@ -263,13 +258,8 @@ class DeepZeroParallel:
 
     def train(self, memory):
         random.shuffle(memory)
-        total_policy_loss = 0
-        total_value_loss = 0
-        total_loss = 0
-        num_batches = 0
-
         for batchIdx in range(0, len(memory), self.args['batch_size']):
-            sample = memory[batchIdx:min(len(memory) - 1, batchIdx + self.args['batch_size'])]
+            sample = memory[batchIdx:min(len(memory), batchIdx + self.args['batch_size'])]
             if len(sample) == 0:
                 continue
 
@@ -291,132 +281,23 @@ class DeepZeroParallel:
 
             self.optimizer.zero_grad()
             loss.backward()
-
-            # Gradient clipping (опционально, но полезно)
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-
             self.optimizer.step()
-
-            # Накапливаем метрики
-            total_policy_loss += policy_loss.item()
-            total_value_loss += value_loss.item()
-            total_loss += loss.item()
-            num_batches += 1
-
-            # Логируем каждый батч
-            self.writer.add_scalar('Train/PolicyLoss_batch', policy_loss.item(), self.train_step)
-            self.writer.add_scalar('Train/ValueLoss_batch', value_loss.item(), self.train_step)
-            self.writer.add_scalar('Train/TotalLoss_batch', loss.item(), self.train_step)
-            self.train_step += 1
-
-        # Возвращаем средние значения
-        if num_batches > 0:
-            return (total_policy_loss / num_batches,
-                    total_value_loss / num_batches,
-                    total_loss / num_batches)
-        return 0, 0, 0
-
-    def log_selfplay_metrics(self, iteration):
-        """Логирует метрики self-play"""
-        if len(self.game_lengths) > 0:
-            avg_length = np.mean(self.game_lengths)
-            min_length = np.min(self.game_lengths)
-            max_length = np.max(self.game_lengths)
-
-            self.writer.add_scalar('SelfPlay/AvgGameLength', avg_length, iteration)
-            self.writer.add_scalar('SelfPlay/MinGameLength', min_length, iteration)
-            self.writer.add_scalar('SelfPlay/MaxGameLength', max_length, iteration)
-            self.writer.add_histogram('SelfPlay/GameLengthDist', np.array(self.game_lengths), iteration)
-
-        if len(self.game_outcomes) > 0:
-            outcomes = np.array(self.game_outcomes)
-            white_wins = np.sum(outcomes == 1) / len(outcomes)
-            black_wins = np.sum(outcomes == -1) / len(outcomes)
-            draws = np.sum(outcomes == 0) / len(outcomes)
-
-            self.writer.add_scalar('SelfPlay/WhiteWinRate', white_wins, iteration)
-            self.writer.add_scalar('SelfPlay/BlackWinRate', black_wins, iteration)
-            self.writer.add_scalar('SelfPlay/DrawRate', draws, iteration)
-
-        # Очищаем метрики для следующей итерации
-        self.game_lengths = []
-        self.game_outcomes = []
 
     def learn(self):
         for iteration in range(self.args['num_iterations']):
-            print(f"\n{'=' * 50}")
-            print(f"Iteration {iteration + 1}/{self.args['num_iterations']}")
-            print(f"{'=' * 50}")
-
             memory = []
 
-            # Self-play фаза
             self.model.eval()
-            print("\nSelf-play phase:")
             for selfPlay_iteration in trange(
                     self.args['num_selfPlay_iterations'] // self.args['num_parallel_games'],
                     desc="Self-play"
             ):
                 memory += self.selfPlay()
 
-            # Логируем метрики self-play
-            self.log_selfplay_metrics(iteration)
-            self.writer.add_scalar('SelfPlay/MemorySize', len(memory), iteration)
-
-            # Анализируем распределение outcomes в памяти
-            if len(memory) > 0:
-                outcomes = [m[2] for m in memory]
-                self.writer.add_histogram('Memory/OutcomeDistribution', np.array(outcomes), iteration)
-                self.writer.add_scalar('Memory/AvgOutcome', np.mean(outcomes), iteration)
-
-            # Training фаза
             self.model.train()
-            print("\nTraining phase:")
-            epoch_losses = []
-
             for epoch in trange(self.args['num_epochs'], desc="Training"):
-                policy_loss, value_loss, total_loss = self.train(memory)
-                epoch_losses.append((policy_loss, value_loss, total_loss))
+                self.train(memory)
 
-                # Логируем по эпохам
-                global_epoch = iteration * self.args['num_epochs'] + epoch
-                self.writer.add_scalar('Train/PolicyLoss_epoch', policy_loss, global_epoch)
-                self.writer.add_scalar('Train/ValueLoss_epoch', value_loss, global_epoch)
-                self.writer.add_scalar('Train/TotalLoss_epoch', total_loss, global_epoch)
-
-            # Средние потери за итерацию
-            avg_policy_loss = np.mean([l[0] for l in epoch_losses])
-            avg_value_loss = np.mean([l[1] for l in epoch_losses])
-            avg_total_loss = np.mean([l[2] for l in epoch_losses])
-
-            self.writer.add_scalar('Train/PolicyLoss_iteration', avg_policy_loss, iteration)
-            self.writer.add_scalar('Train/ValueLoss_iteration', avg_value_loss, iteration)
-            self.writer.add_scalar('Train/TotalLoss_iteration', avg_total_loss, iteration)
-
-            # Логируем learning rate
-            current_lr = self.optimizer.param_groups[0]['lr']
-            self.writer.add_scalar('Train/LearningRate', current_lr, iteration)
-
-            # Логируем нормы градиентов и весов
-            total_norm = 0
-            for p in self.model.parameters():
-                if p.grad is not None:
-                    param_norm = p.grad.data.norm(2)
-                    total_norm += param_norm.item() ** 2
-            total_norm = total_norm ** 0.5
-            self.writer.add_scalar('Train/GradientNorm', total_norm, iteration)
-
-            # Сохраняем модель
-            os.makedirs("weights", exist_ok=True)
             torch.save(self.model.state_dict(), f"weights/model_{iteration}_{self.game}.pt")
             torch.save(self.optimizer.state_dict(), f"weights/optimizer_{iteration}_{self.game}.pt")
 
-            print(f"\nIteration {iteration + 1} completed:")
-            print(f"  Policy Loss: {avg_policy_loss:.4f}")
-            print(f"  Value Loss: {avg_value_loss:.4f}")
-            print(f"  Total Loss: {avg_total_loss:.4f}")
-
-            # Flush tensorboard
-            self.writer.flush()
-
-        self.writer.close()

@@ -91,8 +91,10 @@ class Node:
     def expand(self, policy):
         for action, prob in enumerate(policy):
             if prob > 0:
-                child_state = self.state.copy()
-                child_state = self.game.get_next_state(child_state, action, 1)
+                # state уже neutral, action тоже neutral
+                # Применяем как player=1 (это neutral perspective)
+                child_state = self.game.get_next_state(self.state, action, player=1)
+                # Меняем перспективу для следующего хода
                 child_state = self.game.change_perspective(child_state, player=-1)
                 child = Node(self.game, self.args, child_state, self, action, prob)
                 self.children.append(child)
@@ -103,6 +105,7 @@ class Node:
         value = self.game.get_opponent_value(value)
         if self.parent is not None:
             self.parent.backpropagate(value)
+
 
 
 
@@ -162,7 +165,6 @@ class MCTS:
         action_probs /= np.sum(action_probs)
         return action_probs, winrate
 
-
 class MCTSParallel:
     def __init__(self, game, args, model):
         self.game = game
@@ -171,6 +173,7 @@ class MCTSParallel:
 
     @torch.no_grad()
     def search(self, states, spGames):
+        # states = neutral_states (текущий игрок положительный)
         policy, _ = self.model(
             torch.tensor(self.game.get_encoded_state(states), device=self.model.device)
         )
@@ -190,7 +193,9 @@ class MCTSParallel:
                              self.args['dirichlet_epsilon'] * dirichlet_noise
 
             spg_policy = mask_and_normalize(spg_policy, valid_moves)
-            spg.root = Node(self.game, self.args, states[i], visit_count=1)
+
+            # Root state = neutral_state
+            spg.root = Node(self.game, self.args, states[i].copy(), visit_count=1)
             spg.root.expand(spg_policy)
 
         for search in range(self.args['num_searches']):
@@ -229,7 +234,9 @@ class MCTSParallel:
                 for i, mappingIdx in enumerate(expandable_spGames):
                     node = spGames[mappingIdx].node
                     spg_policy, spg_value = policy[i].copy(), value[i]
+
                     valid_moves = self.game.get_valid_moves(node.state)
                     spg_policy = mask_and_normalize(spg_policy, valid_moves)
+
                     node.expand(spg_policy)
                     node.backpropagate(spg_value)
