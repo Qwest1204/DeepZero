@@ -176,18 +176,20 @@ class DeepZeroParallel:
         return_memory = []
         player = 1
         spGames = [SPG(self.game) for _ in range(self.args['num_parallel_games'])]
-        move_counts = [0] * len(spGames)
 
         while len(spGames) > 0:
             states = np.stack([spg.state for spg in spGames])
+
+            # Меняем перспективу для MCTS (текущий игрок становится положительным)
             neutral_states = self.game.change_perspective(states, player)
 
+            # MCTS работает с neutral_states
             self.mcts.search(neutral_states, spGames)
 
             for i in range(len(spGames) - 1, -1, -1):
                 spg = spGames[i]
-                move_counts[i] += 1
 
+                # Собираем распределение визитов
                 action_probs = np.zeros(self.game.action_size, dtype=np.float64)
                 for child in spg.root.children:
                     action_probs[child.action_taken] = child.visit_count
@@ -206,10 +208,6 @@ class DeepZeroParallel:
                         if not is_terminal:
                             value, is_terminal = 0, True
 
-                        # Записываем метрики игры
-                        self.game_lengths.append(move_counts[i])
-                        self.game_outcomes.append(value if player == 1 else -value)
-
                         for hist_neutral_state, hist_action_probs, hist_player in spg.memory:
                             hist_outcome = value if hist_player == player else \
                                 self.game.get_opponent_value(value)
@@ -219,27 +217,36 @@ class DeepZeroParallel:
                                 hist_outcome
                             ))
                         del spGames[i]
-                        del move_counts[i]
                         continue
 
                     action_probs = valid_moves.astype(np.float64)
                     action_probs = normalize_probs(action_probs)
 
+                # Сохраняем neutral state и action_probs (для neutral perspective)
                 spg.memory.append((spg.root.state, action_probs, player))
 
+                # Температурная обработка
                 temperature_action_probs = action_probs ** (1.0 / self.args['temperature'])
                 temperature_action_probs = normalize_probs(temperature_action_probs)
 
-                action = np.random.choice(self.game.action_size, p=temperature_action_probs)
+                # Выбираем action (в neutral координатах)
+                neutral_action = np.random.choice(self.game.action_size, p=temperature_action_probs)
+
+                # ============ КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ ============
+                # Action из MCTS в координатах neutral_state
+                # Для применения к оригинальному state нужно перевернуть если player == -1
+                if player == -1:
+                    action = self.game.flip_action(neutral_action)
+                else:
+                    action = neutral_action
+                # ================================================
+
+                # Применяем к оригинальному state
                 spg.state = self.game.get_next_state(spg.state, action, player)
 
                 value, is_terminal = self.game.get_value_and_terminated(spg.state, action)
 
                 if is_terminal:
-                    # Записываем метрики игры
-                    self.game_lengths.append(move_counts[i])
-                    self.game_outcomes.append(value if player == 1 else -value)
-
                     for hist_neutral_state, hist_action_probs, hist_player in spg.memory:
                         hist_outcome = value if hist_player == player else \
                             self.game.get_opponent_value(value)
@@ -249,7 +256,6 @@ class DeepZeroParallel:
                             hist_outcome
                         ))
                     del spGames[i]
-                    del move_counts[i]
 
             player = self.game.get_opponent(player)
 
