@@ -4,12 +4,12 @@ import pygame
 from embedder import CNNVAE
 from predictor import PredictorTransformer
 
-vae = CNNVAE(in_channels=3, latent_dim=32, img_size=96).to('cpu')
-vae.load_state_dict(torch.load('embedder/vae82.5.pt', map_location='cpu'))
+vae = CNNVAE(in_channels=3, latent_dim=64, img_size=96).to('cpu')
+vae.load_state_dict(torch.load('embedder/vaev4.pt', map_location='cpu'))
 vae.eval()
 
-predictor = PredictorTransformer(32, 8, 128, 3, 1, 4, 64).to('cpu')
-predictor.load_state_dict(torch.load('predictor/predictor.pt'))
+predictor = PredictorTransformer(64, 8, 128, 3, 4, 4, 128).to('cpu')
+predictor.load_state_dict(torch.load('predictor/predictor_ml.pt', map_location='cpu'))
 predictor.eval()
 
 pygame.init()
@@ -24,8 +24,9 @@ running = True
 actions_list = []
 observations_list = []
 
-z = torch.randn(1, 32, dtype=torch.float32)
+z = torch.randn(1, 64, dtype=torch.float32)
 
+st = 0
 while running:
 
     with torch.no_grad():
@@ -66,7 +67,7 @@ while running:
     # Формируем непрерывное действие: [руль, газ, тормоз]
     action = torch.tensor(np.array([steer, gas, brake], dtype=np.float32))
     
-    if len(observations_list) >63:
+    if len(observations_list) >127:
         actions_list = actions_list[1:]
         observations_list = observations_list[1:]
     
@@ -76,9 +77,14 @@ while running:
     with torch.no_grad():
         A = torch.stack(actions_list).unsqueeze(0).to(torch.float32)
         Z = torch.stack(observations_list).permute(1, 0, 2)
-        z, r = predictor(Z, A)
-        z = z[:, -1, :]
-        r = r[:, -1, :]
-        print(r)
+        mu, logvar = predictor(Z, A)
+        mu = mu[:, -1, :]
+        logvar = logvar[:, -1, :]
+        std = torch.exp(0.5*logvar)
+        eps=torch.rand_like(std)
+        z = mu+eps*std
     
+    print(st)
+    st +=1
+            
     clock.tick(20)
