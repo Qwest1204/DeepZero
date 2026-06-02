@@ -3,6 +3,7 @@ import numpy as np
 import pygame
 from embedder import CNNVAE
 from predictor import PredictorTransformer
+from controller import Controller
 
 vae = CNNVAE(in_channels=3, latent_dim=64, img_size=96).to('cpu')
 vae.load_state_dict(torch.load('embedder/vaev4.pt', map_location='cpu'))
@@ -11,6 +12,8 @@ vae.eval()
 predictor = PredictorTransformer(64, 8, 128, 3, 4, 4, 128).to('cpu')
 predictor.load_state_dict(torch.load('predictor/predictor_ml.pt', map_location='cpu'))
 predictor.eval()
+
+actor = Controller(64, 3)
 
 pygame.init()
 scale = 5
@@ -24,13 +27,13 @@ running = True
 actions_list = []
 observations_list = []
 
-z = torch.randn(1, 64, dtype=torch.float32)
+z_now = torch.randn(1, 64, dtype=torch.float32)
 
 st = 0
 while running:
 
     with torch.no_grad():
-        obs = vae.decode(z).detach().squeeze(0).numpy()*255
+        obs = vae.decode(z_now).detach().squeeze(0).numpy()*255
         
     surf = pygame.surfarray.make_surface(np.transpose(obs, (2, 1, 0)))
     scaled_surf = pygame.transform.scale(surf, (screen_width, screen_height))
@@ -72,7 +75,7 @@ while running:
         observations_list = observations_list[1:]
     
     actions_list.append(action)
-    observations_list.append(z)
+    observations_list.append(z_now)
     
     with torch.no_grad():
         A = torch.stack(actions_list).unsqueeze(0).to(torch.float32)
@@ -82,9 +85,15 @@ while running:
         logvar = logvar[:, -1, :]
         std = torch.exp(0.5*logvar)
         eps=torch.rand_like(std)
-        z = mu+eps*std
+        z_nex = mu+eps*std
+        
+        logits = actor(z_now, z_nex)
+        
+        z_now = z_nex
+        
+        action = torch.argmax(logits, dim=1).item()
     
-    print(st)
-    st +=1
+    print(logits.detach().cpu().numpy())
+    #st +=1
             
     clock.tick(20)
