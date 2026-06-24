@@ -6,11 +6,12 @@ import numpy as np
 class Controller(nn.Module):
     def __init__(self, z_dim, action_dim):
         super().__init__()
-        self.nn = nn.Linear(z_dim * 2, action_dim)
+        self.nn = nn.Linear(z_dim * 2, 32)
+        self.out = nn.Linear(32, 3)
 
     def forward(self, z_in, z_tgt):
         in_nn = torch.cat([z_in, z_tgt], dim=-1)
-        hidden = self.nn(in_nn)
+        hidden = self.out(self.nn(in_nn))
         return torch.tanh(hidden)   # действие в [-1,1]
         mean, log_std, value = self.forward(z_in, z_tgt)
         std = log_std.exp()

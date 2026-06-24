@@ -6,14 +6,16 @@ import math
 
 class CarRacingSequenceDataset(torch.utils.data.Dataset):
     def __init__(self, obs, act, seq_len=8):
-        self.obs = obs      
-        self.actions = act   
+        self.obs = obs
+        self.actions = act
         self.seq_len = seq_len
 
-        assert len(self.obs) == len(self.actions) + 1, \
+        assert len(self.obs) == len(self.actions) + 1, (
             f"Длина obs ({len(self.obs)}) должна быть на 1 больше длины actions ({len(self.actions)})"
-        assert len(self.obs) > self.seq_len, \
+        )
+        assert len(self.obs) > self.seq_len, (
             f"Всего наблюдений {len(self.obs)}, нужно seq_len+1 = {seq_len+1}"
+        )
 
         self.num_samples = len(self.obs) - self.seq_len - 1
 
@@ -23,10 +25,11 @@ class CarRacingSequenceDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         t = idx
         obs_window = self.obs[t : t + self.seq_len]
-        act_window = self.actions[t : t + self.seq_len] 
-        target_obs = self.obs[t + self.seq_len]
+        act_window = self.actions[t : t + self.seq_len]
+        # target — сдвиг на +1
+        target_window = self.obs[t + 1 : t + self.seq_len + 1]
         actions = torch.from_numpy(act_window).long()
-        return obs_window, actions[:, :3], actions[:, 3:], torch.tensor(target_obs)
+        return obs_window, actions[:, :3], actions[:, 3:], torch.tensor(target_window)
 
 
 class SinusoidalPositionalEncoding(nn.Module):
@@ -59,7 +62,7 @@ class MultiHeadAttention(nn.Module):
         self.out_proj = nn.Linear(d_model, d_model)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, query, key, value, is_causal=False) -> torch.Tensor:
+    def forward(self, query, key, value, is_causal=True) -> torch.Tensor:
         B, S, _ = query.shape
         q = self.q_proj(query)
         k = self.k_proj(key)
@@ -123,9 +126,10 @@ class TransformerBlock(nn.Module):
 
 # ---------- Основная модель с несколькими слоями ----------
 class PredictorTransformer(nn.Module):
-    def __init__(self, z_dim, act_dim, d_model, act_space, n_layer, n_head, max_len):
+    def __init__(self, z_dim, act_dim, d_model, act_space, n_layer, n_head, max_len, n_gaussians):
         super().__init__()
-        
+        self.n_gaussians = n_gaussians
+        self.z_dim = z_dim
         self.act_embedder = nn.Linear(act_space, act_dim)
         self.in_proj = nn.Linear(z_dim + act_dim, d_model)
         
@@ -139,22 +143,47 @@ class PredictorTransformer(nn.Module):
         ])
         
         # Выходные проекции
-        self.mu = nn.Linear(d_model, z_dim)
-        self.logvar = nn.Linear(d_model, z_dim)
+        self.pi_head      = nn.Linear(d_model, n_gaussians)              # веса смеси
+        self.mu_head      = nn.Linear(d_model, n_gaussians * z_dim)      # центры
+        self.logsigma_head = nn.Linear(d_model, n_gaussians * z_dim)     # log-σ
     
     def forward(self, z, actions):
-        # z: (B, S, z_dim), actions: (B, S, act_space)
-        act_emb = self.act_embedder(actions)                     # (B, S, act_dim)
-        in_x = torch.cat([z, act_emb], dim=-1)                   # (B, S, z_dim+act_dim)
-        x = self.in_proj(in_x)                                   # (B, S, d_model)
-        
-        x = self.pe(x)                                            # добавляем позиционную информацию
-        
-        # Последовательно пропускаем через все слои
-        for layer in self.layers:
-            x = layer(x)
-        
-        # Финальные линейные проекции на предсказание z и награды
-        mu = self.mu(x)                               # (B, S, z_dim)
-        logvar = self.logvar(x)                         # (B, S, 1)
-        return mu, logvar
+            """
+            Returns:
+                pi:    (B, S, n_gaussians)
+                mu:    (B, S, n_gaussians, z_dim)
+                sigma: (B, S, n_gaussians, z_dim)
+            """
+            act_emb = self.act_embedder(actions)              # (B, S, act_dim)
+            in_x = torch.cat([z, act_emb], dim=-1)             # (B, S, z_dim+act_dim)
+            x = self.in_proj(in_x)                             # (B, S, d_model)
+            x = self.pe(x)
+
+            for layer in self.layers:
+                x = layer(x)                                   # (B, S, d_model)
+
+            B, S, _ = x.shape
+
+            pi = F.softmax(self.pi_head(x), dim=-1)           # (B, S, n_gaussians)
+            mu = self.mu_head(x).view(B, S, self.n_gaussians, self.z_dim)
+            sigma = torch.exp(self.logsigma_head(x).view(B, S, self.n_gaussians, self.z_dim)) + 1e-6
+
+            return pi, mu, sigma
+
+    def sample(self, pi, mu, sigma, temperature=1.0):
+        """Семплирование z_{t+1} из смеси гауссиан."""
+        B, S, n_g, z_dim = mu.shape
+
+        if temperature != 1.0:
+            pi = (pi + 1e-10).log() / temperature
+            pi = F.softmax(pi, dim=-1)
+
+        component = torch.multinomial(
+            pi.view(B * S, n_g), num_samples=1
+        ).view(B, S, 1, 1)
+
+        mu_selected = mu.gather(dim=2, index=component.expand(-1, -1, -1, z_dim))
+        sigma_selected = sigma.gather(dim=2, index=component.expand(-1, -1, -1, z_dim))
+
+        eps = torch.randn_like(mu_selected)
+        return (mu_selected + sigma_selected * eps).squeeze(2)
