@@ -794,12 +794,14 @@ dependencies = [
     { name = "flax", version = "0.12.7", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "gymnasium", extra = ["box2d"] },
     { name = "notebook" },
+    { name = "openpyxl" },
     { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scikit-learn", version = "1.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "stable-baselines3", extra = ["extra"] },
     { name = "swig" },
     { name = "torch" },
     { name = "torchinfo" },
+    { name = "vizdoom" },
 ]
 
 [package.metadata]
@@ -808,11 +810,13 @@ requires-dist = [
     { name = "flax", specifier = ">=0.10.7" },
     { name = "gymnasium", extras = ["box2d"], specifier = ">=1.2.3" },
     { name = "notebook", specifier = ">=7.5.0,<8.0.0" },
+    { name = "openpyxl", specifier = ">=3.1.5" },
     { name = "scikit-learn", specifier = ">=1.7.2" },
     { name = "stable-baselines3", extras = ["extra"], specifier = ">=2.8.0" },
     { name = "swig", specifier = ">=4.4.1" },
     { name = "torch", specifier = ">=2.12.0" },
     { name = "torchinfo", specifier = ">=1.8.0" },
+    { name = "vizdoom", specifier = ">=1.3.0" },
 ]
 
 [[package]]
@@ -822,6 +826,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/0f/d5/c66da9b79e5bdb124974bfe172b4daf3c984ebd9c2a06e2b8a4dc7331c72/defusedxml-0.7.1.tar.gz", hash = "sha256:1bb3032db185915b62d7c6209c5a8792be6a32ab2fedacc84e01b52c51aa3e69", size = 75520, upload-time = "2021-03-08T10:59:26.269Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/07/6c/aa3f2f849e01cb6a001cd8554a88d4c77c5c1a31c95bdf1cf9301e6d9ef4/defusedxml-0.7.1-py2.py3-none-any.whl", hash = "sha256:a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61", size = 25604, upload-time = "2021-03-08T10:59:24.45Z" },
+]
+
+[[package]]
+name = "et-xmlfile"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d3/38/af70d7ab1ae9d4da450eeec1fa3918940a5fafb9055e934af8d6eb0c2313/et_xmlfile-2.0.0.tar.gz", hash = "sha256:dab3f4764309081ce75662649be815c4c9081e88f0837825f90fd28317d4da54", size = 17234, upload-time = "2024-10-25T17:25:40.039Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c1/8b/5fe2cc11fee489817272089c4203e679c63b570a5aaeb18d852ae3cbba6a/et_xmlfile-2.0.0-py3-none-any.whl", hash = "sha256:7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa", size = 18059, upload-time = "2024-10-25T17:25:39.051Z" },
 ]
 
 [[package]]
@@ -2613,6 +2626,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/fd/55/b3b49a1b97aabcfbbd6c7326df9cb0b6fa0c0aefa8e89d500939e04aa229/opencv_python-4.13.0.92-cp37-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:620d602b8f7d8b8dab5f4b99c6eb353e78d3fb8b0f53db1bd258bb1aa001c1d5", size = 72927042, upload-time = "2026-02-05T06:59:23.389Z" },
     { url = "https://files.pythonhosted.org/packages/fb/17/de5458312bcb07ddf434d7bfcb24bb52c59635ad58c6e7c751b48949b009/opencv_python-4.13.0.92-cp37-abi3-win32.whl", hash = "sha256:372fe164a3148ac1ca51e5f3ad0541a4a276452273f503441d718fab9c5e5f59", size = 30932638, upload-time = "2026-02-05T07:02:14.98Z" },
     { url = "https://files.pythonhosted.org/packages/e9/a5/1be1516390333ff9be3a9cb648c9f33df79d5096e5884b5df71a588af463/opencv_python-4.13.0.92-cp37-abi3-win_amd64.whl", hash = "sha256:423d934c9fafb91aad38edf26efb46da91ffbc05f3f59c4b0c72e699720706f5", size = 40212062, upload-time = "2026-02-05T07:02:12.724Z" },
+]
+
+[[package]]
+name = "openpyxl"
+version = "3.1.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "et-xmlfile" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3d/f9/88d94a75de065ea32619465d2f77b29a0469500e99012523b91cc4141cd1/openpyxl-3.1.5.tar.gz", hash = "sha256:cf0e3cf56142039133628b5acffe8ef0c12bc902d2aadd3e0fe5878dc08d1050", size = 186464, upload-time = "2024-06-28T14:03:44.161Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c0/da/977ded879c29cbd04de313843e76868e6e13408a94ed6b987245dc7c8506/openpyxl-3.1.5-py2.py3-none-any.whl", hash = "sha256:5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2", size = 250910, upload-time = "2024-06-28T14:03:41.161Z" },
 ]
 
 [[package]]
@@ -4447,6 +4472,40 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/c1/37/945b4ca0ac27e3dc4952642d4c900edd030b3da6c9634875af6e13ae80e5/uvloop-0.22.1-cp314-cp314t-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:b91328c72635f6f9e0282e4a57da7470c7350ab1c9f48546c0f2866205349d21", size = 4467065, upload-time = "2025-10-16T22:16:58.206Z" },
     { url = "https://files.pythonhosted.org/packages/97/cc/48d232f33d60e2e2e0b42f4e73455b146b76ebe216487e862700457fbf3c/uvloop-0.22.1-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:daf620c2995d193449393d6c62131b3fbd40a63bf7b307a1527856ace637fe88", size = 4328384, upload-time = "2025-10-16T22:16:59.36Z" },
     { url = "https://files.pythonhosted.org/packages/e4/16/c1fd27e9549f3c4baf1dc9c20c456cd2f822dbf8de9f463824b0c0357e06/uvloop-0.22.1-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:6cde23eeda1a25c75b2e07d39970f3374105d5eafbaab2a4482be82f272d5a5e", size = 4296730, upload-time = "2025-10-16T22:17:00.744Z" },
+]
+
+[[package]]
+name = "vizdoom"
+version = "1.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "gymnasium" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "pygame-ce" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/1b/4c/3e8c51147f5da2f598c428d961ec916bda4fa56f9b369190d15359d390e2/vizdoom-1.3.0.tar.gz", hash = "sha256:591f58e3ad3d146c5b4a82eb51da064231a1a43a547c6255e9985eee20dbe601", size = 26687217, upload-time = "2026-02-11T13:33:58.241Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/78/84/962f373066d9b56346091180327f692b30e84beb9690dda7734851e8d033/vizdoom-1.3.0-cp310-cp310-macosx_14_0_arm64.whl", hash = "sha256:e142b39c2d82769a0abeb4234ebadfbabc8d2d27123d937ce746f369319d8ed7", size = 40773632, upload-time = "2026-02-11T13:32:57.987Z" },
+    { url = "https://files.pythonhosted.org/packages/3c/aa/aa8cd8b78e60fad317a5624947a38031ecf110e514de1641be04af31e0fb/vizdoom-1.3.0-cp310-cp310-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:f23770e760eb7a7ef4e6514c1ed1ffecfc1099f59d91720b39b87f8caae49332", size = 38728277, upload-time = "2026-02-11T13:33:00.735Z" },
+    { url = "https://files.pythonhosted.org/packages/27/bd/7d3bdaa4f29b06cacfb104b4c365828800430830a4fc9036c3fe3fc599b3/vizdoom-1.3.0-cp310-cp310-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:4ac36e25d5182cd4e6f12172b8981c921faa20952b9bd6373731b49a20d569c6", size = 38905188, upload-time = "2026-02-11T13:33:04.081Z" },
+    { url = "https://files.pythonhosted.org/packages/b4/4a/c236b491b2a7a85d40a67c4061a2afe407a13ec8262a62e989e2d686ea86/vizdoom-1.3.0-cp310-cp310-win_amd64.whl", hash = "sha256:3a061faf0870c41da657562f725d021c4afd122178bda008e1c5284c120a835c", size = 26048875, upload-time = "2026-02-11T12:16:38.357Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/d2/093693c2d7920bb999cf7360e2f7e40ba690f860bb522f36c16143a616a9/vizdoom-1.3.0-cp311-cp311-macosx_14_0_arm64.whl", hash = "sha256:8b7976ad2a18aa8d2fa435047c1495270a7988d40c2449d953f0c1bd3b4c597c", size = 40775000, upload-time = "2026-02-11T13:33:07.064Z" },
+    { url = "https://files.pythonhosted.org/packages/d1/a1/40a8ad9bb6c4ccc334318877c5d3537283beb97bacc9133173be5ed0626e/vizdoom-1.3.0-cp311-cp311-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:97407e1651b621c2b49adfdf7a2a262e5b1a0090fa844cc59e3fb6d0f9a09cfa", size = 38729202, upload-time = "2026-02-11T13:33:09.883Z" },
+    { url = "https://files.pythonhosted.org/packages/6c/db/1d75d8f5aa572dfcd02ec896a15248a527ad4c9b78424b46150ee087e465/vizdoom-1.3.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:b989998f1fe377d432cb0c8c4b2cc672a7fb6e4679dfc10f4b9c00f6ed27e09b", size = 38906494, upload-time = "2026-02-11T13:33:13.231Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/00/c96bafcac18535e56ffdbb87d13448e7998115a8b67d6a889538f8bad93c/vizdoom-1.3.0-cp311-cp311-win_amd64.whl", hash = "sha256:b0bb339bdf188eb4f97fd757e5d041ef2103e52907d4dfd6f7b776798443b692", size = 26049124, upload-time = "2026-02-11T12:16:41.542Z" },
+    { url = "https://files.pythonhosted.org/packages/19/8d/11cf6e63f17a912235811c554f14eba868bf776def77187dda82fd1f9788/vizdoom-1.3.0-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:aff3a01d9de4a1742e3f8f6b334ac77a8355f5c9c1dda1bdfd869140695d8025", size = 40776388, upload-time = "2026-02-11T13:33:15.968Z" },
+    { url = "https://files.pythonhosted.org/packages/39/fd/d29eac65da0e87702589e79dc7315e5801d3a8bba215745725d8e89ad5a3/vizdoom-1.3.0-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:d27c9b20a93a9cdc4331988914e0d75d0d61f1818444ee956948562b49ab4d74", size = 38731123, upload-time = "2026-02-11T13:33:18.777Z" },
+    { url = "https://files.pythonhosted.org/packages/4c/fd/34e5f1adf4598396ea229477e8748ed0a6d7b4d075f7e47f22e64eb9d598/vizdoom-1.3.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:43ba2524779d1ef0d7dfd773fe71a97afeff2b2d0db52a4d73381a515572c046", size = 38912318, upload-time = "2026-02-11T13:33:22.866Z" },
+    { url = "https://files.pythonhosted.org/packages/c0/f2/775cccb4ec637f8c75267edce065abfbea7c05f337303f872444eaf3e068/vizdoom-1.3.0-cp312-cp312-win_amd64.whl", hash = "sha256:dde72da46a05725a4e0aa3a9d7291ae1486c8b7469a1b0a7d2fcc146bd913ae7", size = 26050543, upload-time = "2026-02-11T12:16:44.289Z" },
+    { url = "https://files.pythonhosted.org/packages/74/36/baa40de7b6acd89354454ebd239f6d443df0c0642bb17741be558e4bbfd3/vizdoom-1.3.0-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:81fba862bca5315594662e12973bdecc8ffe9b35fba5c6f3d91d01eab9025124", size = 40776497, upload-time = "2026-02-11T13:33:26.182Z" },
+    { url = "https://files.pythonhosted.org/packages/44/0a/467e8e4d9157951aa9393e3e575a048dd403c50af32f1d9b114e50e07f9b/vizdoom-1.3.0-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:3a3cdc78535c9f619a31bc1d51f48b8707b3be3be9c8bb3397567ff4255e464c", size = 38731386, upload-time = "2026-02-11T13:33:33.106Z" },
+    { url = "https://files.pythonhosted.org/packages/e4/58/38dd4a903eae2e334f9f9fc95f0e0d5967d9f92628db3288291a5efc8df8/vizdoom-1.3.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:2c4e455512295995fc6fd3cd380bbe70985c7db6739b758ea10922c73e6bfb90", size = 38912406, upload-time = "2026-02-11T13:33:35.99Z" },
+    { url = "https://files.pythonhosted.org/packages/d5/35/d83b5bd1c4f99365ae8e96c9139037ee1fb2e7edbc78926a2228221988ec/vizdoom-1.3.0-cp313-cp313-win_amd64.whl", hash = "sha256:42c761270a8a7f85d0823aa1e0eb76b23d544a20dbd7d113d0c5848c108ac043", size = 26050572, upload-time = "2026-02-11T12:16:47.56Z" },
+    { url = "https://files.pythonhosted.org/packages/d4/04/2738ceef2e565e1fdd63493d8d4231f9032cfdbdf6622613e3a9df720c49/vizdoom-1.3.0-cp314-cp314-macosx_14_0_arm64.whl", hash = "sha256:a514d48a302c5c46239d88e6d51371946245390bb7fa84e25825b6991ce9b9d5", size = 40777044, upload-time = "2026-02-11T13:33:38.763Z" },
+    { url = "https://files.pythonhosted.org/packages/21/03/1420e02931a9846bac6dde3db508be24fa1b8573a674f5b0ff8d77efd124/vizdoom-1.3.0-cp314-cp314-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:aab449672309cb755eefe16c60085ac61c613d02483a8a0776c8972ce7665464", size = 38731841, upload-time = "2026-02-11T13:33:41.541Z" },
+    { url = "https://files.pythonhosted.org/packages/01/b5/1b991b0b623d546dfe6681a649fadda675125b865d8160c2f5528d9ad641/vizdoom-1.3.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:026be364a12ed6054caddc3349ddb7797f0f6a23ddbbc524cc80c0b93c3f4934", size = 38912313, upload-time = "2026-02-11T13:33:44.93Z" },
+    { url = "https://files.pythonhosted.org/packages/05/d5/6bb744a0953d0a102a460a019e89751dffcc8060bdd3e0fb5a964189da69/vizdoom-1.3.0-cp314-cp314-win_amd64.whl", hash = "sha256:395321fe228e0d5c083e4cadf0ad14a627f99a4b1a1352f2e44bcb2b0507ef61", size = 26638105, upload-time = "2026-02-11T12:16:50.674Z" },
 ]
 
 [[package]]
