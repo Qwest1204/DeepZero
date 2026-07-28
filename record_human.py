@@ -8,6 +8,7 @@ import pygame
 import vizdoom as vzd
 from PIL import Image
 
+SCREEN_SIZE = 256
 
 def _init_pygame(obs_shape, scale, title):
     pygame.init()
@@ -175,7 +176,7 @@ def play_doom():
 
     while running:
         state = game.get_state()
-        obs_resized = np.array(Image.fromarray(state.screen_buffer).resize((256, 256)))
+        obs_resized = np.array(Image.fromarray(state.screen_buffer).resize((SCREEN_SIZE, SCREEN_SIZE)))
         observations_list.append(obs_resized)
 
         _render(screen, obs_resized)
