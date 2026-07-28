@@ -1,4 +1,5 @@
-from embedder import CNNVAE
-from predictor import CarRacingSequenceDataset, PredictorTransformer
+from dataset import RecordingDataset
+from embedder import VAE
+from predictor import PredictorTransformer
 
-__all__ = ['CNNVAE', 'CarRacingSequenceDataset', 'PredictorTransformer']
+__all__ = ["RecordingDataset", "VAE", "PredictorTransformer"]

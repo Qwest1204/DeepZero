@@ -1,3 +1,3 @@
-from embedder.model import CNNVAE
+from embedder.model import VAE, SelfAttention2D
 
-__all__ = ["CNNVAE"]
+__all__ = ["VAE", "SelfAttention2D"]
