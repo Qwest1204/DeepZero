@@ -12,8 +12,9 @@ DeepZero — deep RL world-model агент для CarRacing-v3 и ViZDoom. Тр
 
 ## Команды
 ```bash
-python record_human.py [1|2]   # 1=CarRacing, 2=ViZDoom — запись игры человеком
-python play_in_dream.py      # авторегрессивная симуляция мира из случайного латентного вектора
+python record_human.py [1|2]     # 1=CarRacing, 2=ViZDoom — запись игры человеком
+python play_in_dream.py          # авторегрессивная симуляция мира из случайного латентного вектора
+python vae_play.py [car|doom]    # игра через VAE-бутылку (encode→decode перед отображением)
 ```
 
 Обучение происходит в Jupyter-ноутбуках:
@@ -30,10 +31,21 @@ python play_in_dream.py      # авторегрессивная симуляци
 | Predict | `predictor/model.py:PredictorTransformer` | `(z_seq, action_seq)` → MDN над `z_next` (n=4 гауссианы, размерность 32) |
 | Control | `controller/model.py:Controller` | `[z_current, z_target]` → `tanh(action)` в `[-1,1]^3` |
 
-VAE — настраиваемый конструктор: количество/ядра/страйды свёрток, опциональный SelfAttention2D на указанных слоях.
+VAE (`embedder/vae.py`) — две независимые ветки развития:
+- **`master`** — оригинальный VAE на `Conv2d+ReLU` и `ConvTranspose2d`.
+- **`ResVAE`** — улучшенная архитектура: `ResBlock2D (GroupNorm+ReLU+Conv3×3×2)`, `Upsample(nearest)+Conv2d`, поддержка LPIPS и PatchGAN.
+
 SelfAttention2D реализован в `embedder/attention.py` (MultiHeadAttention через `F.scaled_dot_product_attention`).
 Сохранение/загрузка: `VAE.save_pretrained(path)` / `VAE.from_pretrained(path)` — JSON-конфиг + safetensors.
 Веса лежат в `weights/{car,doom}/` (config.json + model.safetensors).
+
+**Loss-метрики** (`embedder/losses.py`):
+| Loss | Назначение |
+|---|---|
+| MSE | Попиксельная реконструкция |
+| β·KL | β-VAE регуляризация (по умолч. β=0.1) |
+| LPIPS | Перцептивная loss через VGG16 (сохраняет NPC/монстры) |
+| Adversarial | PatchGAN (70×70), LSGAN loss — резкие текстуры |
 
 ## Подводные камни
 - **Нет тестов, линтера, CI** — проверяй всё вручную.
