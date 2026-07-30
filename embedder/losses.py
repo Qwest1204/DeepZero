@@ -222,3 +222,83 @@ class VAECombinedLoss(nn.Module):
 
         losses["loss"] = loss
         return losses
+
+
+# ---------------------------------------------------------------------------
+# Wavelet loss — Haar DWT (no extra deps)
+# ---------------------------------------------------------------------------
+
+def haar_dwt(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Single-level 2D Haar discrete wavelet transform.
+
+    Returns ``(LL, LH, HL, HH)`` each ``(B, C, H/2, W/2)``.
+    """
+    B, C, H, W = x.shape
+    x = x.reshape(B, C, H // 2, 2, W // 2, 2)
+    x = x.permute(0, 1, 2, 4, 3, 5).contiguous()
+    ll = (x[..., 0, 0] + x[..., 0, 1] + x[..., 1, 0] + x[..., 1, 1]) / 2
+    lh = (x[..., 0, 0] - x[..., 0, 1] + x[..., 1, 0] - x[..., 1, 1]) / 2
+    hl = (x[..., 0, 0] + x[..., 0, 1] - x[..., 1, 0] - x[..., 1, 1]) / 2
+    hh = (x[..., 0, 0] - x[..., 0, 1] - x[..., 1, 0] + x[..., 1, 1]) / 2
+    return ll, lh, hl, hh
+
+
+def wavelet_loss(recon: torch.Tensor, target: torch.Tensor, levels: int = 3) -> torch.Tensor:
+    """Multi-level Haar wavelet L1 loss.
+
+    Computes L1 distance on high-frequency subbands (LH, HL, HH) at ``levels``
+    scales. Summed over all levels.
+    """
+    total = torch.tensor(0.0, device=recon.device)
+    x, y = recon, target
+    for _ in range(levels):
+        ll_x, lh_x, hl_x, hh_x = haar_dwt(x)
+        ll_y, lh_y, hl_y, hh_y = haar_dwt(y)
+        total = total + F.l1_loss(lh_x, lh_y, reduction="sum")
+        total = total + F.l1_loss(hl_x, hl_y, reduction="sum")
+        total = total + F.l1_loss(hh_x, hh_y, reduction="sum")
+        x, y = ll_x, ll_y  # next level on LL
+    return total
+
+
+# ---------------------------------------------------------------------------
+# Gaussian pyramid loss — multi-scale MSE
+# ---------------------------------------------------------------------------
+
+def gaussian_pyramid_loss(recon: torch.Tensor, target: torch.Tensor, levels: int = 3) -> torch.Tensor:
+    """Multi-scale MSE loss on Gaussian pyramid.
+
+    Downsamples with ``avg_pool2d(k=2)`` and computes MSE at each level.
+    Summed over all levels.
+    """
+    total = torch.tensor(0.0, device=recon.device)
+    x, y = recon, target
+    for _ in range(levels):
+        x = F.avg_pool2d(x, 2)
+        y = F.avg_pool2d(y, 2)
+        total = total + F.mse_loss(x, y, reduction="sum")
+    return total
+
+
+# ---------------------------------------------------------------------------
+# Free-bits KL — β-VAE with per-dimension free nats
+# ---------------------------------------------------------------------------
+
+def free_bits_kl(mu: torch.Tensor, logvar: torch.Tensor, free_nats: float = 0.5) -> torch.Tensor:
+    """KL divergence with per-dimension free bits.
+
+    ``sum(max(KL_per_dim - free_nats, 0))`` instead of ``beta * KL``.
+    Allows the model to use up to ``free_nats`` per latent dimension without
+    penalty — critical for preserving fine details in the bottleneck.
+
+    Args:
+        mu: Latent mean ``(B, D)``.
+        logvar: Latent log-variance ``(B, D)``.
+        free_nats: Number of free nats per dimension (default 0.5).
+
+    Returns:
+        Scalar KL loss (summed over batch and dimensions).
+    """
+    kl_per_dim = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())  # (B, D)
+    kl_penalised = torch.clamp(kl_per_dim - free_nats, min=0.0)
+    return kl_penalised.sum()
