@@ -299,6 +299,8 @@ def free_bits_kl(mu: torch.Tensor, logvar: torch.Tensor, free_nats: float = 0.5)
     Returns:
         Scalar KL loss (summed over batch and dimensions).
     """
+    mu = mu.flatten(1)
+    logvar = logvar.flatten(1)
     kl_per_dim = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())  # (B, D)
     kl_penalised = torch.clamp(kl_per_dim - free_nats, min=0.0)
     return kl_penalised.sum()

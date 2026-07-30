@@ -1,10 +1,10 @@
 # %% [markdown]
-# ## train_xlmodel — ConvVAE 128²×z=768 (сжатие 64:1)
+# ## train_xlmodel — ConvVAE 256²→z=16×16×4 (сжатие 192:1)
 #
-# - Вход: 128×128 (изображение ресайзится перед VAE)
-# - 5× Conv2d(stride=2)+ReLU → 4×4×256 → 4096 → z=768
-# - Сжатие 64:1 против 256:1 — детали сохраняются
-# - ~12M параметров, быстрый CPU-инференс (3 upsamples меньше чем 256²)
+# - Вход: 256×256 (изображение ресайзится перед VAE)
+# - 4× Conv2d(stride=2)+ReLU → 16×16×256 → conv_mu → z=(4,16,16) → 1024
+# - Квадратный латент: Spatial mu/logvar вместо fc bridge
+# - ~1.1M параметров, быстрый CPU-инференс
 
 # %%
 import sys
@@ -35,9 +35,10 @@ EPOCHS = 80
 LR_VAE = 3e-5
 LR_D = 3e-5
 
-LATENT_DIM = 768
-IMG_SIZE = 128
-ENCODER_CHANNELS = [32, 64, 128, 256, 256]  # 5 стадий: 128→4×4
+LATENT_DIM = 4          # latent_channels (квадратный латент 16×16×4)
+IMG_SIZE = 256
+ENCODER_CHANNELS = [32, 64, 128, 256]  # 4 стадии: 256→16
+FLAT_LATENT = False     # conv_mu/logvar вместо fc bridge
 
 NDF = 128
 FREE_NATS = 0.5          # per-dim free nats (free_bits_kl)
@@ -61,6 +62,7 @@ vae = VAE(
     in_channels=3,
     latent_dim=LATENT_DIM,
     img_size=IMG_SIZE,
+    flat_latent=FLAT_LATENT,
     encoder_channels=ENCODER_CHANNELS,
     final_activation="sigmoid",
 ).to(DEVICE)
