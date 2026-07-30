@@ -97,16 +97,26 @@ for epoch in range(EPOCHS):
     # --- Visualisation ---
     vae.eval()
     with torch.no_grad():
-        recon, _, _ = vae(last_batch)
+        recon, mu, _ = vae(last_batch)
         n = min(4, len(last_batch))
-        fig, axes = plt.subplots(2, n, figsize=(3 * n, 6))
+        n_ch = mu.shape[1]
+        fig, axes = plt.subplots(3, n, figsize=(3 * n, 8))
         for i in range(n):
             axes[0, i].imshow(np.transpose(last_batch[i].cpu().numpy(), (1, 2, 0)))
             axes[0, i].axis("off")
-            axes[1, i].imshow(np.transpose(recon[i].cpu().numpy(), (1, 2, 0)))
+            latent_maps = mu[i].cpu().numpy()
+            ch_imgs = []
+            for c in range(n_ch):
+                ch = latent_maps[c]
+                ch = (ch - ch.min()) / (ch.max() - ch.min() + 1e-8)
+                ch_imgs.append(ch)
+            axes[1, i].imshow(np.concatenate(ch_imgs, axis=0), cmap="gray", vmin=0, vmax=1)
             axes[1, i].axis("off")
+            axes[2, i].imshow(np.transpose(recon[i].cpu().numpy(), (1, 2, 0)))
+            axes[2, i].axis("off")
         axes[0, 0].set_ylabel("Original")
-        axes[1, 0].set_ylabel("Recon")
+        axes[1, 0].set_ylabel(f"Latent\n({n_ch}ch)")
+        axes[2, 0].set_ylabel("Recon")
         plt.suptitle(f"Epoch {epoch+1}/{EPOCHS}")
         plt.tight_layout()
         plt.savefig(f"{SAVE_DIR}/val_{epoch+1:03d}.png", dpi=150)
