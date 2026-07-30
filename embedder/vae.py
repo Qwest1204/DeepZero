@@ -1,11 +1,9 @@
-"""ResNet-based VAE with GroupNorm residual blocks and Upsample·Conv decoder.
+"""Lightweight ConvVAE — 6-stage Conv2d(stride=2)+ReLU encoder, Upsample+Conv decoder.
 
-Architecture inspired by SDXL KL-F8 / LDM VAE:
-- Encoder: ``ResBlock`` × N → ``Downsample``
-- Decoder: ``Upsample`` → ``ResBlock`` × N
-- ``GroupNorm(32)`` inside each residual block for training stability
-- ``nn.Upsample(scale=2, mode='nearest')`` + ``Conv2d(3,3)`` replaces
-  ``ConvTranspose2d`` to avoid checkerboard artifacts and ``output_padding``
+Inspired by the World Models VAE (Ha & Schmidhuber, 2018).
+Optimised for CPU inference — no GroupNorm, no SelfAttention, no skip connections.
+Preserves the same public API: ``encode``, ``decode``, ``forward``, ``loss_vae``,
+``save_pretrained``, ``from_pretrained``.
 """
 
 import json
@@ -16,223 +14,80 @@ import torch.nn as nn
 import torch.nn.functional as F
 from safetensors.torch import load_file, save_file
 
-from embedder.attention import SelfAttention2D
-
-
-# ---------------------------------------------------------------------------
-# ResBlock — core building block
-# ---------------------------------------------------------------------------
-
-class ResBlock2D(nn.Module):
-    """Pre-norm residual block with GroupNorm + ReLU + Conv3x3 × 2.
-
-    ``GroupNorm(32)`` is applied before each convolution. A ``Conv2d(1×1)``
-    skip connection is added when ``in_channels != out_channels``.
-
-    Args:
-        in_channels: Number of input channels.
-        out_channels: Number of output channels.
-        norm_groups: Number of groups in GroupNorm (default 32).
-    """
-
-    def __init__(self, in_channels: int, out_channels: int, norm_groups: int = 32):
-        super().__init__()
-        ng1 = min(norm_groups, in_channels)
-        ng2 = min(norm_groups, out_channels)
-        self.norm1 = nn.GroupNorm(ng1, in_channels)
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
-        self.norm2 = nn.GroupNorm(ng2, out_channels)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
-
-        if in_channels != out_channels:
-            self.skip = nn.Conv2d(in_channels, out_channels, kernel_size=1)
-        else:
-            self.skip = nn.Identity()
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        shortcut = self.skip(x)
-        x = self.norm1(x)
-        x = F.relu(x)
-        x = self.conv1(x)
-        x = self.norm2(x)
-        x = F.relu(x)
-        x = self.conv2(x)
-        return x + shortcut
-
-
-# ---------------------------------------------------------------------------
-# Downsample & Upsample helpers
-# ---------------------------------------------------------------------------
-
-class DownsampleBlock(nn.Module):
-    """Strided convolution for spatial downsampling.
-
-    Uses ``Conv2d(k=4, s=2, p=1)`` — same receptive field as the original VAE.
-    """
-
-    def __init__(self, in_channels: int, out_channels: int):
-        super().__init__()
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=4, stride=2, padding=1)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.conv(x)
-
-
-class UpsampleBlock(nn.Module):
-    """Nearest-neighbour upsample → Conv2d(k=3, s=1) to anti-alias.
-
-    Replaces ``ConvTranspose2d`` — no checkerboard artifacts, no output_padding.
-    """
-
-    def __init__(self, in_channels: int, out_channels: int):
-        super().__init__()
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = F.interpolate(x, scale_factor=2, mode="nearest")
-        return self.conv(x)
-
-
-# ---------------------------------------------------------------------------
-# ResVAE — full model
-# ---------------------------------------------------------------------------
 
 class VAE(nn.Module):
-    """ResNet-based VAE with GroupNorm residual blocks and Upsample·Conv decoder.
-
-    Replaces the original Conv+ConvTranspose VAE architecture. The new design
-    uses ``ResBlock2D`` + ``DownsampleBlock`` / ``UpsampleBlock`` for better
-    training stability and artifact-free upsampling.
-
-    Mirrors the ``VAE`` interface (``encode``, ``decode``, ``forward``,
-    ``loss_vae``, ``save_pretrained``, ``from_pretrained``) for drop-in
-    replacement.
+    """ConvVAE with strided convolutions and nearest-neighbour upsampling.
 
     Args:
-        in_channels: Number of input image channels.
-        latent_dim: Dimensionality of the latent vector ``z``.
-        img_size: Spatial size of the squared input image.
-        encoder_channels: List of output channels for each encoder stage.
-        decoder_channels: List of output channels for each decoder stage.
-        attention_layers: Indices of encoder stages after which to insert
-            ``SelfAttention2D``. The decoder mirrors these positions.
-        num_attention_heads: Number of heads in each attention block.
-        resnet_blocks_per_stage: Number of ``ResBlock2D`` per stage (1 or 2).
-        norm_groups: GroupNorm group count inside each ResBlock.
-        final_activation: ``"sigmoid"`` or ``"tanh"``.
+        in_channels: Number of input image channels (default 3).
+        latent_dim: Dimensionality of the flat latent vector ``z`` (default 768).
+        img_size: Spatial size of the squared input image (default 256).
+        encoder_channels: Output channels per encoder stage.
+            Default ``[32, 64, 128, 256, 256, 256]`` → 6×downsample 256→4.
+        final_activation: ``"sigmoid"`` (default) or ``"tanh"``.
     """
 
     def __init__(
         self,
         in_channels: int = 3,
-        latent_dim: int = 128,
-        img_size: int = 96,
+        latent_dim: int = 768,
+        img_size: int = 256,
         encoder_channels: list | None = None,
-        decoder_channels: list | None = None,
-        attention_layers: list | None = None,
-        num_attention_heads: int = 4,
-        resnet_blocks_per_stage: int = 1,
-        norm_groups: int = 32,
         final_activation: str = "sigmoid",
+        **kwargs,  # ignored — backward compat with old config.json
     ):
         super().__init__()
         self.in_channels = in_channels
         self.latent_dim = latent_dim
         self.img_size = img_size
-        self.num_attention_heads = num_attention_heads
-        self.resnet_blocks_per_stage = resnet_blocks_per_stage
-        self.norm_groups = norm_groups
         self.final_activation = final_activation
 
         if encoder_channels is None:
-            encoder_channels = [32, 64, 128, 256, 256]
-        if decoder_channels is None:
-            decoder_channels = list(reversed(encoder_channels[:-1])) + [in_channels]
-        if attention_layers is None:
-            attention_layers = []
-
+            encoder_channels = [32, 64, 128, 256, 256, 256]
         self.encoder_channels = encoder_channels
-        self.decoder_channels = decoder_channels
-        self.attention_layers = attention_layers
 
         # ---- Encoder ----
-        self.enc_blocks, self._enc_out_size, self.enc_init_conv = self._build_encoder()
-        self._enc_h, self._enc_w = self._enc_out_size
+        enc_layers = []
+        ch = in_channels
+        h = w = img_size
+        for out_ch in encoder_channels:
+            enc_layers.append(nn.Conv2d(ch, out_ch, kernel_size=4, stride=2, padding=1))
+            enc_layers.append(nn.ReLU())
+            ch = out_ch
+            h = (h + 2 - 4) // 2 + 1
+            w = (w + 2 - 4) // 2 + 1
+        self.encoder = nn.Sequential(*enc_layers)
+        self._enc_h, self._enc_w = h, w
 
-        flat_dim = encoder_channels[-1] * self._enc_h * self._enc_w
+        flat_dim = ch * h * w
         self.fc_mu = nn.Linear(flat_dim, latent_dim)
         self.fc_logvar = nn.Linear(flat_dim, latent_dim)
         self.decoder_fc = nn.Linear(latent_dim, flat_dim)
 
         # ---- Decoder ----
-        self.dec_blocks = self._build_decoder()
-
-    # ------------------------------------------------------------------
-    # Encoder
-    # ------------------------------------------------------------------
-
-    def _build_encoder(self):
-        blocks = nn.ModuleList()
-        first_ch = self.encoder_channels[0]
-        init_conv = nn.Conv2d(self.in_channels, first_ch, kernel_size=3, padding=1)
-        ch = first_ch
-        h = w = self.img_size
-
-        for stage_idx, out_ch in enumerate(self.encoder_channels):
-            for _ in range(self.resnet_blocks_per_stage):
-                blocks.append(ResBlock2D(ch, out_ch, self.norm_groups))
-                ch = out_ch
-
-            blocks.append(DownsampleBlock(ch, out_ch))
-            h = (h + 2 - 4) // 2 + 1
-            w = (w + 2 - 4) // 2 + 1
-
-            if stage_idx in self.attention_layers:
-                blocks.append(SelfAttention2D(out_ch, self.num_attention_heads))
-
-        return blocks, (h, w), init_conv
-
-    # ------------------------------------------------------------------
-    # Decoder
-    # ------------------------------------------------------------------
-
-    def _build_decoder(self):
-        blocks = nn.ModuleList()
-        enc_len = len(self.encoder_channels)
-        ch = self.encoder_channels[-1]
-        h, w = self._enc_out_size
-
-        for stage_idx, out_ch in enumerate(self.decoder_channels):
-            blocks.append(UpsampleBlock(ch, out_ch))
-            h *= 2
-            w *= 2
-
-            enc_attn_idx = enc_len - 1 - stage_idx
-            if enc_attn_idx in self.attention_layers:
-                blocks.append(SelfAttention2D(out_ch, self.num_attention_heads))
-
-            for _ in range(self.resnet_blocks_per_stage):
-                blocks.append(ResBlock2D(out_ch, out_ch, self.norm_groups))
-                ch = out_ch
-
-            if stage_idx == len(self.decoder_channels) - 1:
-                act = nn.Tanh() if self.final_activation == "tanh" else nn.Sigmoid()
-                blocks.append(act)
-
-        return blocks
+        dec_channels = list(reversed(encoder_channels[1:])) + [in_channels]
+        self.decoder_channels = dec_channels
+        dec_layers = []
+        for i, out_ch in enumerate(dec_channels):
+            dec_layers.append(nn.Upsample(scale_factor=2, mode="nearest"))
+            dec_layers.append(nn.Conv2d(ch, out_ch, kernel_size=3, padding=1))
+            if i < len(dec_channels) - 1:
+                dec_layers.append(nn.ReLU())
+            else:
+                dec_layers.append(
+                    nn.Sigmoid() if final_activation == "sigmoid" else nn.Tanh()
+                )
+            ch = out_ch
+        self.decoder = nn.Sequential(*dec_layers)
 
     # ------------------------------------------------------------------
     # Forward
     # ------------------------------------------------------------------
 
     def encode(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        x = self.enc_init_conv(x)
-        for block in self.enc_blocks:
-            x = block(x)
+        x = self.encoder(x)
         x = x.view(x.size(0), -1)
-        mu = self.fc_mu(x)
-        logvar = self.fc_logvar(x)
-        return mu, logvar
+        return self.fc_mu(x), self.fc_logvar(x)
 
     def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
         std = torch.exp(0.5 * logvar)
@@ -242,9 +97,7 @@ class VAE(nn.Module):
     def decode(self, z: torch.Tensor) -> torch.Tensor:
         x = self.decoder_fc(z)
         x = x.view(-1, self.encoder_channels[-1], self._enc_h, self._enc_w)
-        for block in self.dec_blocks:
-            x = block(x)
-        return x
+        return self.decoder(x)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         mu, logvar = self.encode(x)
@@ -272,11 +125,6 @@ class VAE(nn.Module):
             "latent_dim": self.latent_dim,
             "img_size": self.img_size,
             "encoder_channels": self.encoder_channels,
-            "decoder_channels": self.decoder_channels,
-            "attention_layers": self.attention_layers,
-            "num_attention_heads": self.num_attention_heads,
-            "resnet_blocks_per_stage": self.resnet_blocks_per_stage,
-            "norm_groups": self.norm_groups,
             "final_activation": self.final_activation,
         }
 
