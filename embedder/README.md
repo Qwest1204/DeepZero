@@ -81,7 +81,7 @@ vae = VAE.from_pretrained("../weights/my_model")
 
 ## Loss-функции (`embedder/losses.py`)
 
-Используются в `train_xlmodel.py`:
+Используются в `train_model.py`:
 
 | Функция | Назначение |
 |---|---|

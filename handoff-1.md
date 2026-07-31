@@ -51,7 +51,7 @@ final_activation='sigmoid'
 
 ## Обучение
 
-### `embedder/train_xlmodel.py`
+### `embedder/train_model.py`
 
 ```python
 LR = 3e-5                # единый lr для VAE и D
@@ -110,7 +110,7 @@ embedder/
   losses.py         — LPIPS, PatchGAN, VAECombinedLoss, wavelet_loss, gauss_loss, free_bits_kl
   attention.py      — MultiHeadAttention, SelfAttention2D
   __init__.py       — экспорт всех классов/функций
-  train_xlmodel.py  — активный скрипт обучения (Doom, 256², квадратный латент)
+  train_model.py  — активный скрипт обучения (Doom, 256², квадратный латент)
   embedder.ipynb    — старый ноутбук (не обновлялся)
   train_.py         — удалён (был для старого ResVAE)
 ```
@@ -128,7 +128,7 @@ controller/         — Controller (CMA-ES, не трогали)
 ## Команды
 
 ```bash
-uv run python embedder/train_xlmodel.py    # обучение VAE
+uv run python embedder/train_model.py    # обучение VAE
 uv run python record_human.py 2            # запись Doom
 uv run python vae_play.py doom             # VAE encode→decode
 uv run python play_in_dream.py             # dream rollout
