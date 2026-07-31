@@ -1,3 +1,3 @@
-from predictor.model import CarRacingSequenceDataset, PredictorTransformer
+from predictor.model import PredictorTransformer
 
-__all__ = ['CarRacingSequenceDataset', 'PredictorTransformer']
+__all__ = ["PredictorTransformer"]

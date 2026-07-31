@@ -1,7 +1,7 @@
 """Play a game through the VAE bottleneck — every frame is encoded then decoded before display.
 
 Usage:
-    python vae_play.py [car|doom] [--vae-weights path] [--record]
+    python vae_play.py [car/|doom] [--vae-weights path] [--record]
 
 If ``--vae-weights`` is omitted, the script auto-detects the latest epoch checkpoint
 in ``weights/{game}_*/`` (e.g. ``weights/doom_0/``).
@@ -115,7 +115,7 @@ def _frame_to_tensor(frame_rgb, img_size, vae_activation):
     arr = np.array(frame_pil, dtype=np.float32) / 255.0
     if vae_activation == "tanh":
         arr = arr * 2.0 - 1.0
-    tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)
+    tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).to("mps")
     return tensor
 
 
@@ -251,7 +251,7 @@ def play_doom(vae, do_record):
 
         tensor = _frame_to_tensor(frame_raw, vae.img_size, vae.final_activation)
         with torch.no_grad():
-            recon, _, _ = vae(tensor)
+            recon, _, _ = vae(tensor.to("mps"))
         display = _recon_to_display(recon, frame_raw.shape[:2][::-1], vae.final_activation)
         _render_recon(screen, display)
 
@@ -319,7 +319,7 @@ def main():
         weights_path = _auto_detect_weights(game)
         print(f"Автоопределённые веса: {weights_path}")
 
-    vae = VAE.from_pretrained(weights_path, map_location="cpu")
+    vae = VAE.from_pretrained(weights_path, map_location="cpu").to("mps")
     vae.eval()
     print(f"VAE загружен: latent_dim={vae.latent_dim}, img_size={vae.img_size}")
 
