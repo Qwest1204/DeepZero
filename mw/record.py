@@ -7,6 +7,9 @@ rewards and success flags are saved at full rate (one per env step).
 
 import os
 import random
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 import pygame

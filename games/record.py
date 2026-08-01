@@ -1,4 +1,7 @@
+import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from games.carracing import play_car_racing
 from games.doom import play_doom
