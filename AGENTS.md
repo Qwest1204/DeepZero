@@ -22,16 +22,20 @@ DeepZero — deep RL world-model агент для CarRacing-v3 и ViZDoom. Тр
 ## Команды
 
 ```bash
-uv run python record_human.py [1|2|3]           # 1=CarRacing, 2=ViZDoom, 3=MetaWorld — запись игры
-uv run python play_in_dream.py                  # dream rollout
-uv run python vae_play.py                       # Doom: VAE в реальном времени
-uv run python embedder/train_model.py          # обучение VAE (Doom, квадратный латент)
+uv run python -m games.record car|doom        # запись игры (CarRacing / ViZDoom)
+uv run python -m mw.record                    # запись MetaWorld
+uv run python play_in_dream.py                # dream rollout (car, требует VAE car)
+uv run python vae_play.py                     # Doom: VAE в реальном времени
+uv run python embedder/train_model.py         # обучение VAE (Doom, квадратный латент)
 ```
 
-Записи сохраняются в `try/` (car), `try/Doom/` (ViZDoom), `try/MW/` (MetaWorld: obs=RGB 192² каждый 2-й кадр, joints=полный obs-вектор каждый шаг, act=4-dim каждый шаг, reward=dense float32 каждый шаг, success-флаги каждый шаг).
+Записи сохраняются в `try/CarRacing/` (car-act/car-obs/car-reward, obs=RGB 192², act=3-dim, reward каждый шаг, n_obs=n_act+1), `try/Doom/` (doom-act/doom-obs, obs=RGB 192², act=1-dim int32) и `try/MW/` (MetaWorld: obs=RGB 192² каждый 2-й кадр, joints=полный obs-вектор каждый шаг, act=4-dim каждый шаг, reward=dense float32 каждый шаг, success-флаги каждый шаг).
 
 ## Ключевые файлы
 
+- `games/record.py` — CLI записи CarRacing/ViZDoom; `games/carracing.py`, `games/doom.py`, `games/common.py` (общие pygame-хелперы и `save_session`)
+- `mw/record.py` — запись MetaWorld (play_metaworld), `mw/env.json` — описания 50 задач
+- `dataset/dataset.py` — единый RecordingDataset (car/doom/mw, z-файлы, done-фильтр, reward)
 - `embedder/vae.py` — единый VAE (ConvVAE/ResVAE, flat/square latent)
 - `embedder/losses.py` — wavelet_loss, gaussian_pyramid_loss, free_bits_kl, PatchGAN
 - `embedder/train_model.py` — обучение с нуля

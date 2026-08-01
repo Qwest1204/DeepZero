@@ -30,7 +30,7 @@ DEVICE = "mps"
 
 
 # ---------------------------------------------------------------------------
-# helpers — shared with record_human.py
+# helpers — shared with games/common.py
 # ---------------------------------------------------------------------------
 
 def _init_pygame(obs_shape, scale, title):

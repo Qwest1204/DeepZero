@@ -8,9 +8,10 @@ from torch.utils.data import Dataset
 
 
 def _glob_both(data_dir, pattern):
-    """Glob in data_dir and its Doom/ and MW/ subdirectories."""
+    """Glob in data_dir and its CarRacing/, Doom/ and MW/ subdirectories."""
     return (
         glob.glob(os.path.join(data_dir, pattern))
+        + glob.glob(os.path.join(data_dir, "CarRacing", pattern))
         + glob.glob(os.path.join(data_dir, "Doom", pattern))
         + glob.glob(os.path.join(data_dir, "MW", pattern))
     )
@@ -20,13 +21,13 @@ def _find_sessions(data_dir, game):
     obs_act_pairs = []
 
     if game in ("car", None):
-        act_files = _glob_both(data_dir, "actions-car*.npy")
+        act_files = _glob_both(data_dir, "car-act*.npy")
         for act_path in act_files:
-            m = re.search(r"actions-car(\d+)\.npy", os.path.basename(act_path))
+            m = re.search(r"car-act(\d+)\.npy", os.path.basename(act_path))
             if not m:
                 continue
             session_id = m.group(1)
-            obs_path = os.path.join(os.path.dirname(act_path), f"observations-car{session_id}.npy")
+            obs_path = os.path.join(os.path.dirname(act_path), f"car-obs{session_id}.npy")
             if os.path.exists(obs_path):
                 obs_act_pairs.append((obs_path, act_path))
 
@@ -57,7 +58,7 @@ def _find_sessions(data_dir, game):
         names = [os.path.basename(p) for p in available]
         raise FileNotFoundError(
             f"Не найдено пар obs+act в '{data_dir}'.\n"
-            f"Искал: actions-car*.npy + observations-car*.npy, "
+            f"Искал: car-act*.npy + car-obs*.npy, "
             f"doom-act*.npy + doom-obs*.npy "
             f"или metaworld-act*.npy + metaworld-obs*.npy.\n"
             f"Найденные .npy файлы: {names if names else '(нет .npy)'}"
@@ -216,7 +217,7 @@ class RecordingDataset(Dataset):
 
             done_arr = None
             reward_arr = None
-            if fmt in ("metaworld", "metaworld_z"):
+            if "metaworld" in os.path.basename(obs_path):
                 m = re.search(r"metaworld-obs(\d+)-(.*)\.npy", os.path.basename(obs_path))
                 if m:
                     done_path = os.path.join(
@@ -228,6 +229,15 @@ class RecordingDataset(Dataset):
                     reward_path = os.path.join(
                         os.path.dirname(obs_path),
                         f"metaworld-reward{m.group(1)}-{m.group(2)}.npy",
+                    )
+                    if os.path.exists(reward_path):
+                        reward_arr = np.load(reward_path).astype(np.float32)
+            elif "car" in os.path.basename(obs_path):
+                m = re.search(r"car-obs(\d+)\.npy", os.path.basename(obs_path))
+                if m:
+                    reward_path = os.path.join(
+                        os.path.dirname(obs_path),
+                        f"car-reward{m.group(1)}.npy",
                     )
                     if os.path.exists(reward_path):
                         reward_arr = np.load(reward_path).astype(np.float32)
@@ -244,7 +254,7 @@ class RecordingDataset(Dataset):
             if self.mode == "vae":
                 allowed = np.arange(len(obs))
             else:
-                n_samples = len(obs) - self.seq_len - 1 if fmt == "car" else len(obs) - self.seq_len
+                n_samples = len(obs) - self.seq_len - 1
                 allowed = np.arange(n_samples)
                 # drop windows crossing an episode boundary (success/done)
                 if done is not None and self.seq_len > 0:
@@ -311,7 +321,5 @@ class RecordingDataset(Dataset):
                 tgt_seq = tgt_seq.permute(0, 3, 1, 2)
 
         act_seq = torch.from_numpy(act_seq).float()
-        if fmt == "car" and act_seq.ndim == 2 and act_seq.shape[-1] == 4:
-            act_seq = act_seq[:, :3]
 
         return obs_seq, act_seq, tgt_seq
