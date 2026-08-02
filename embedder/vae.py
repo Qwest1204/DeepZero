@@ -3,9 +3,10 @@
 Configurable via constructor parameters:
 - ``flat_latent=True``  — fc bridge (legacy, backward-compat)
 - ``flat_latent=False`` — conv bridge → square latent map (B, C, H, W)
-- ``use_resblocks=False`` — plain Conv2d+ReLU (lightweight, CPU-friendly)
+- ``use_resblocks=False`` — plain Conv2d+activation (lightweight, CPU-friendly)
 - ``use_resblocks=True``  — ResBlock2D+GroupNorm (stable, detail-preserving)
 - ``use_attention=True``  — SelfAttention2D at selected encoder stages
+- ``hidden_activation``  — activation in hidden layers (default: ``"relu"``)
 """
 
 import json
@@ -20,13 +21,37 @@ from embedder.attention import SelfAttention2D
 
 
 # ---------------------------------------------------------------------------
+# Hidden activation registry (residual-block fn vs plain-module)
+# ---------------------------------------------------------------------------
+
+_HIDDEN_ACTIVATION_FNS = {
+    "relu": F.relu,
+    "silu": F.silu,
+    "gelu": F.gelu,
+    "leaky_relu": lambda x: F.leaky_relu(x, negative_slope=0.2),
+    "elu": F.elu,
+}
+
+_HIDDEN_ACTIVATION_MODULES = {
+    "relu": lambda: nn.ReLU(),
+    "silu": lambda: nn.SiLU(),
+    "gelu": lambda: nn.GELU(),
+    "leaky_relu": lambda: nn.LeakyReLU(negative_slope=0.2),
+    "elu": lambda: nn.ELU(),
+}
+
+_SUPPORTED_ACTIVATIONS = tuple(_HIDDEN_ACTIVATION_FNS)
+
+
+# ---------------------------------------------------------------------------
 # ResBlock — optional residual building block
 # ---------------------------------------------------------------------------
 
 class ResBlock2D(nn.Module):
-    """Pre-norm residual block with GroupNorm + ReLU + Conv3x3 x 2."""
+    """Pre-norm residual block with GroupNorm + activation + Conv3x3 x 2."""
 
-    def __init__(self, in_channels: int, out_channels: int, norm_groups: int = 32):
+    def __init__(self, in_channels: int, out_channels: int, norm_groups: int = 32,
+                 activation: str = "relu"):
         super().__init__()
         ng1 = min(norm_groups, in_channels)
         ng2 = min(norm_groups, out_channels)
@@ -34,6 +59,7 @@ class ResBlock2D(nn.Module):
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
         self.norm2 = nn.GroupNorm(ng2, out_channels)
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.act = _HIDDEN_ACTIVATION_FNS.get(activation, F.relu)
         if in_channels != out_channels:
             self.skip = nn.Conv2d(in_channels, out_channels, kernel_size=1)
         else:
@@ -42,10 +68,10 @@ class ResBlock2D(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         shortcut = self.skip(x)
         x = self.norm1(x)
-        x = F.relu(x)
+        x = self.act(x)
         x = self.conv1(x)
         x = self.norm2(x)
-        x = F.relu(x)
+        x = self.act(x)
         x = self.conv2(x)
         return x + shortcut
 
@@ -97,6 +123,8 @@ class VAE(nn.Module):
             ``use_resblocks=False``).
         norm_groups: GroupNorm groups per ResBlock2D.
         final_activation: ``"sigmoid"`` or ``"tanh"``.
+        hidden_activation: Activation in hidden layers (relu/silu/gelu/
+            leaky_relu/elu). Default ``"relu"`` keeps old checkpoints intact.
     """
     def __init__(
         self,
@@ -113,6 +141,7 @@ class VAE(nn.Module):
         res_blocks_per_stage: int = 1,
         norm_groups: int = 32,
         final_activation: str = "sigmoid",
+        hidden_activation: str = "relu",
         **kwargs,  # backward compat
     ):
         super().__init__()
@@ -127,6 +156,12 @@ class VAE(nn.Module):
         self.res_blocks_per_stage = res_blocks_per_stage
         self.norm_groups = norm_groups
         self.final_activation = final_activation
+        if hidden_activation not in _HIDDEN_ACTIVATION_FNS:
+            raise ValueError(
+                f"Неизвестная hidden_activation: {hidden_activation!r}. "
+                f"Доступно: {_SUPPORTED_ACTIVATIONS}"
+            )
+        self.hidden_activation = hidden_activation
 
         if encoder_channels is None:
             encoder_channels = [32, 64, 128, 256, 256, 256]
@@ -177,7 +212,7 @@ class VAE(nn.Module):
         ch = self.in_channels
         for out_ch in self.encoder_channels:
             layers.append(nn.Conv2d(ch, out_ch, kernel_size=4, stride=2, padding=1))
-            layers.append(nn.ReLU())
+            layers.append(_HIDDEN_ACTIVATION_MODULES[self.hidden_activation]())
             ch = out_ch
         return nn.Sequential(*layers)
 
@@ -186,7 +221,7 @@ class VAE(nn.Module):
         ch = self.encoder_channels[0]
         for stage_idx, out_ch in enumerate(self.encoder_channels):
             for _ in range(self.res_blocks_per_stage):
-                blocks.append(ResBlock2D(ch, out_ch, self.norm_groups))
+                blocks.append(ResBlock2D(ch, out_ch, self.norm_groups, self.hidden_activation))
                 ch = out_ch
             blocks.append(DownsampleBlock(ch, out_ch))
             if self.use_attention and stage_idx in self.attention_layers:
@@ -204,7 +239,7 @@ class VAE(nn.Module):
             layers.append(nn.Upsample(scale_factor=2, mode="nearest"))
             layers.append(nn.Conv2d(ch, out_ch, kernel_size=3, padding=1))
             if i < len(self.decoder_channels) - 1:
-                layers.append(nn.ReLU())
+                layers.append(_HIDDEN_ACTIVATION_MODULES[self.hidden_activation]())
             else:
                 layers.append(
                     nn.Sigmoid() if self.final_activation == "sigmoid" else nn.Tanh()
@@ -223,7 +258,7 @@ class VAE(nn.Module):
             if self.use_attention and enc_attn_idx in self.attention_layers:
                 blocks.append(SelfAttention2D(out_ch, self.num_attention_heads))
             for _ in range(self.res_blocks_per_stage):
-                blocks.append(ResBlock2D(out_ch, out_ch, self.norm_groups))
+                blocks.append(ResBlock2D(out_ch, out_ch, self.norm_groups, self.hidden_activation))
             if stage_idx == len(self.decoder_channels) - 1:
                 act = nn.Tanh() if self.final_activation == "tanh" else nn.Sigmoid()
                 blocks.append(act)
@@ -320,6 +355,7 @@ class VAE(nn.Module):
             "res_blocks_per_stage": self.res_blocks_per_stage,
             "norm_groups": self.norm_groups,
             "final_activation": self.final_activation,
+            "hidden_activation": self.hidden_activation,
         }
 
     def save_pretrained(self, save_dir: str):
@@ -335,6 +371,8 @@ class VAE(nn.Module):
             config = json.load(f)
         if "flat_latent" not in config:
             config["flat_latent"] = True
+        if "hidden_activation" not in config:
+            config["hidden_activation"] = "relu"
         model = cls(**config)
         state_dict = load_file(os.path.join(save_dir, "model.safetensors"), device=str(map_location))
         model.load_state_dict(state_dict)
