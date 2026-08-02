@@ -33,8 +33,9 @@ vae = VAE.from_pretrained("../weights/my_model")
 | `attention_layers` | `[]` | Индексы ступеней с attention (например `[2]`) |
 | `num_attention_heads` | 4 | Голов в SelfAttention2D |
 | `res_blocks_per_stage` | 1 | ResBlock2D на ступень |
+| `hidden_activation` | `"relu"` | Скрытая активация ResBlock2D и plain encoder/decoder: `"relu"`/`"silu"`/`"gelu"`/`"leaky_relu"`/`"elu"` |
 | `norm_groups` | 32 | Группы GroupNorm |
-| `final_activation` | "sigmoid" | Финальная активация декодера |
+| `final_activation` | "sigmoid" | Финальная активация декодера (final skip не трогается) |
 
 ⚠️ **`use_attention=True` без непустого `attention_layers` молча отключает внимание** — всегда передавай `attention_layers=[N]`.
 
@@ -46,7 +47,7 @@ vae = VAE.from_pretrained("../weights/my_model")
 Каждая ступень энкодера (res-режим): `[ResBlock2D(in, out)] × N → DownsampleBlock(out, out)`.
 Декодер зеркалит: `UpsampleBlock(in, out) → [ResBlock2D(out, out)] × N`.
 
-- `ResBlock2D`: GroupNorm → ReLU → Conv3×3 × 2 + residual
+- `ResBlock2D`: GroupNorm → `hidden_activation` → Conv3×3 × 2 + residual (skip проходит без активации)
 - `DownsampleBlock`: Conv2d(k=4, s=2)
 - `UpsampleBlock`: `nn.Upsample(nearest, ×2)` + `Conv2d(k=3)` — без checkerboard-артефактов
 
@@ -63,8 +64,8 @@ vae = VAE.from_pretrained("../weights/my_model")
 | `latent_dim` | 4 (каналы) |
 | Латент | квадратный `(B, 4, 32, 32)` → 4096 димов |
 | Сжатие | **48:1** (256²·3 / 4096) — то же, что SDXL KL-F8 |
-| Параметры | ~8.2M (оценка) |
-| Чекпоинт | `../weights/doom_sq_mid_49` (пер-эпохальные `doom_sq_mid_*`) |
+| Параметры | 4.9M |
+| Чекпоинт | `../weights/doom_sq_mid_49` (A10); локальная реплика `../weights/doom_vae_sd` |
 
 ### Обучение
 
@@ -78,6 +79,12 @@ vae = VAE.from_pretrained("../weights/my_model")
 - **3 чётких кластера с переходами** в 2D-проекции — соответствуют сценам записи; переходы между ними — то, что должен выучить предиктор.
 - **Ближайшие соседи семантически похожи** — латент гладкий, динамика в нём обучаема.
 - Итог: латент готов к этапу **predict** (MDN Transformer).
+
+### Записи и обучение
+
+- Фреймы записываются в RGB 192² (`try/CarRacing/`, `try/Doom/`, `try/MW/`); модель обучена на 256², при обучении используется `ResizedVAEDataset` (resize 192→256) из `embedder.ipynb`.
+- Картинки VAE из корня перенесены: `games/vae_doom.py`, `games/vae_car.py`, `mw/vae_mw.py` (латент-композит: первые 3 канала → RGB, остальные — серые карты).
+- CarRacing чекпоинты `weights/CR/model_032`/`model_033` — legacy flat-latent; `from_pretrained` автоопределяет их по отсутствию `flat_latent` в `config.json`.
 
 ## Loss-функции (`embedder/losses.py`)
 

@@ -32,7 +32,7 @@ from games.doom import _doom_action_index
 
 DEVICE = "mps"
 LAT_SCALE = 4    # latent map upscale
-FINAL_SCALE = 2  # final window scale
+FINAL_SCALE = 1.5  # final window scale
 
 
 def _auto_detect_weights():
