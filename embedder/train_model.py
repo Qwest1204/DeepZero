@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
@@ -14,32 +14,48 @@ from embedder import VAE, PatchGANDiscriminator, discriminator_loss
 from embedder.losses import wavelet_loss, gaussian_pyramid_loss, free_bits_kl
 
 # --- Hyperparameters ---
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE = "mps"#torch.device("cuda" if torch.cuda.is_available() else "cpu")
+USE_AMP = DEVICE == "cuda"  # mixed precision (torch.amp); CUDA only
 BATCH_SIZE = 32
-EPOCHS = 80
+EPOCHS = 50
 LR = 3e-5
 
-LATENT_DIM = 4
-IMG_SIZE = 256
-ENCODER_CHANNELS = [32, 64, 128, 256]
+IMG_SIZE = 96
+LATENT_DIM = 2
 FLAT_LATENT = False
+ENCODER_CHANNELS = [32, 64, 64, 128]
+USE_RESBLOCKS = True
+USE_ATTENTION = False
+ATTENTION_LAYERS = [2]
+NUM_ATTENTION_HEADS = 4
+RES_BLOCKS_PER_STAGE = 1
+NORM_GROUPS = 32
 NDF = 128
 FREE_NATS = 0.5
 W_WAVELET = 0.3
 W_GAUSS = 0.1
 W_ADV = 0.001
 
-SAVE_DIR = "../weights/doom_xl"
+SAVE_DIR = "../weights/CR"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 # --- Data ---
-dataset = RecordingDataset(data_dir="../try", game="doom", mode="vae")
+dataset = RecordingDataset(data_dir="../try/CarRacing/", game="car", mode="vae")
 dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
 
 # --- Models ---
 vae = VAE(
-    in_channels=3, latent_dim=LATENT_DIM, img_size=IMG_SIZE,
-    flat_latent=FLAT_LATENT, encoder_channels=ENCODER_CHANNELS,
+    in_channels=3,
+    latent_dim=LATENT_DIM,
+    img_size=IMG_SIZE,
+    flat_latent=FLAT_LATENT,
+    encoder_channels=ENCODER_CHANNELS,
+    use_resblocks=USE_RESBLOCKS,
+    use_attention=USE_ATTENTION,
+    attention_layers=ATTENTION_LAYERS,
+    num_attention_heads=NUM_ATTENTION_HEADS,
+    res_blocks_per_stage=RES_BLOCKS_PER_STAGE,
+    norm_groups=NORM_GROUPS,
     final_activation="sigmoid",
 ).to(DEVICE)
 
@@ -47,7 +63,7 @@ discriminator = PatchGANDiscriminator(in_channels=3, ndf=NDF).to(DEVICE)
 
 opt = optim.AdamW(vae.parameters(), lr=LR)
 opt_d = optim.AdamW(discriminator.parameters(), lr=LR)
-scaler = GradScaler()
+scaler = GradScaler("cuda") if USE_AMP else None
 
 # --- Train ---
 for epoch in range(EPOCHS):
@@ -61,17 +77,21 @@ for epoch in range(EPOCHS):
         x = batch.to(DEVICE)
         x = F.interpolate(x, size=IMG_SIZE)
 
-        with autocast():
+        with autocast("cuda", enabled=USE_AMP):
             recon_x, mu, logvar = vae(x)
             loss_d, _ = discriminator_loss(
                 discriminator(x), discriminator(recon_x.detach()), loss_type="lsgan"
             )
 
         opt_d.zero_grad()
-        scaler.scale(loss_d).backward()
-        scaler.step(opt_d)
+        if scaler is not None:
+            scaler.scale(loss_d).backward()
+            scaler.step(opt_d)
+        else:
+            loss_d.backward()
+            opt_d.step()
 
-        with autocast():
+        with autocast("cuda", enabled=USE_AMP):
             d_fake = discriminator(recon_x)
             mse = F.mse_loss(recon_x, x, reduction="sum")
             wav = wavelet_loss(recon_x, x, levels=3)
@@ -81,9 +101,14 @@ for epoch in range(EPOCHS):
             total = mse + W_WAVELET * wav + W_GAUSS * gauss + kl + W_ADV * adv
 
         opt.zero_grad()
-        scaler.scale(total).backward()
-        scaler.step(opt)
-        scaler.update()
+        if scaler is not None:
+            scaler.scale(total).backward()
+            scaler.step(opt)
+        else:
+            total.backward()
+            opt.step()
+        if scaler is not None:
+            scaler.update()
 
         total_loss += total.item()
         last_batch = x
@@ -123,5 +148,5 @@ for epoch in range(EPOCHS):
         plt.close()
     vae.train()
 
-vae.save_pretrained(SAVE_DIR)
-print(f"Model saved to {SAVE_DIR}")
+    vae.save_pretrained(f"{SAVE_DIR}/model_{epoch+1:03d}")
+    print(f"Model saved to {SAVE_DIR}/model_{epoch+1:03d}.png")
