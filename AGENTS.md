@@ -24,8 +24,10 @@ DeepZero — deep RL world-model агент для CarRacing-v3 и ViZDoom. Тр
 ```bash
 uv run python -m games.record car|doom        # запись игры (CarRacing / ViZDoom)
 uv run python -m mw.record                    # запись MetaWorld
-uv run python play_in_dream.py                # dream rollout (car, требует VAE car)
-uv run python vae_play.py                     # Doom: VAE в реальном времени
+uv run python games/vae_doom.py               # Doom: VAE в реальном времени (ориг+рекон+латент)
+uv run python games/vae_car.py                # CarRacing: VAE в реальном времени
+uv run python mw/vae_mw.py                    # MetaWorld: VAE в реальном времени
+uv run python games/play_in_dream.py          # dream rollout (car, требует VAE car)
 uv run python embedder/train_model.py         # обучение VAE (Doom, квадратный латент)
 ```
 
@@ -53,7 +55,7 @@ uv run python embedder/train_model.py         # обучение VAE (Doom, кв
 | `attention_layers` | `[]` | `[2]` (внимание на 2-й ступени) |
 | `latent_dim` | 4 (каналы) | 4 |
 | `encoder_channels` | [32,64,128,256] | [64,128,256] |
-| Параметры | 1.07M | ~8.2M (оценка) |
+| Параметры | 1.07M | 4.9M |
 | Латент | `(B,4,32,32)` = 4096 | `(B,4,32,32)` = 4096 |
 | Сжатие | 48:1 | 48:1 |
 
