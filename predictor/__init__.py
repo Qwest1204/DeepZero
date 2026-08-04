@@ -1,3 +1,3 @@
-from predictor.model import PredictorTransformer
+from predictor.model import PredictorConfig, PredictorTransformer
 
-__all__ = ["PredictorTransformer"]
+__all__ = ["PredictorConfig", "PredictorTransformer"]

@@ -83,6 +83,7 @@ def play_doom():
 
     actions_list = []
     observations_list = []
+    rewards_list = []
     running = True
     os.makedirs(DOOM_DIR, exist_ok=True)
 
@@ -99,14 +100,17 @@ def play_doom():
         action = _doom_action_index(pygame.key.get_pressed())
         actions_list.append(action)
         game.make_action(action_masks[action])
+        rewards_list.append(float(game.get_last_reward()))
 
         if game.is_episode_finished():
             save_session(
                 DOOM_DIR, "doom",
                 np.array(actions_list, dtype=np.int32), observations_list,
+                rewards_list,
             )
             actions_list = []
             observations_list = []
+            rewards_list = []
             game.new_episode()
 
         clock.tick(30)

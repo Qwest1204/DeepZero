@@ -9,15 +9,15 @@
 
 ## Проект
 
-DeepZero — deep RL world-model агент для CarRacing-v3 и ViZDoom. Трёхэтапный пайплайн: **embed** (VAE) → **predict** (MDN Transformer) → **control** (линейная политика, CMA-ES).
+DeepZero — deep RL world-model агент для CarRacing-v3, ViZDoom и MetaWorld. Трёхэтапный пайплайн: **embed** (VAE) → **predict** (MDN Transformer) → **control** (линейная политика, CMA-ES).
 
 Текущий фокус — предиктор для Doom (этап **predict**).
 
-**Статус этапа embed (VAE для Doom): ЗАВЕРШЁН.**
-- Архитектура: resblocks + attention, квадратный латент 32×32×4=4096, сжатие 48:1 (256×256 → 4096).
-- Обучен на A10 (50 эпох), чекпоинт `../weights/doom_sq_mid_49`.
-- Диагностика латента (PCA в `embedder.ipynb`): 100% живых димов, 3 чётких кластера с переходами, ближайшие соседи семантически похожи — латент готов к предиктору.
-- Параметры предиктора ещё обсуждаются (d_model/n_layer/n_gaussians/seq_len в TODO).
+**Статус этапа embed (VAE): ЗАВЕРШЁН, закоммичен в `master`.**
+- Doom: архитектура resblocks + attention, квадратный латент `(B,4,32,32)`=4096, сжатие 48:1 (256²×3 → 4096), обучен на A10 (50 эпох) → `doom_sq_mid_49`; локально реплика `weights/doom_vae_sd`.
+- CarRacing/MetaWorld: также поддерживаются, чекпоинты `weights/CR/model_032`, `model_033`.
+- Диагностика латента (PCA в `embedder.ipynb`): 100% живых димов, чёткие кластеры с переходами, ближайшие соседи семантически похожи — латент готов к предиктору.
+- Следующий шаг — этап **predict**: параметры предиктора ещё обсуждаются (d_model/n_layer/n_gaussians/seq_len в TODO).
 
 ## Команды
 
@@ -55,10 +55,15 @@ uv run python embedder/train_model.py         # обучение VAE (Doom, кв
 | `attention_layers` | `[]` | `[2]` (внимание на 2-й ступени) |
 | `latent_dim` | 4 (каналы) | 4 |
 | `encoder_channels` | [32,64,128,256] | [64,128,256] |
-| Параметры | 1.07M | 4.9M |
+| `hidden_activation` | `"relu"` | `"relu"` (в ResBlock2D и plain encoder/decoder) |
+| `res_blocks_per_stage` | 1 | 1 |
+| `norm_groups` | 32 | 32 |
+| Параметры | ~1.1M | 4.9M |
 | Латент | `(B,4,32,32)` = 4096 | `(B,4,32,32)` = 4096 |
 | Сжатие | 48:1 | 48:1 |
 
 ⚠️ Внимание: `use_attention=True` без `attention_layers` (непустого списка) молча отключает внимание — всегда передавай `attention_layers=[N]`.
 
-См. `handoff-1.md` для полного контекста.
+💡 Скрытая активация в ResBlock2D и plain encoder/decoder задаётся `hidden_activation` (доступны `"relu"`, `"silu"`, `"gelu"`, `"leaky_relu"`, `"elu"`); `final_activation` прямой декодера управляется отдельно (default `"sigmoid"`). Финальная активация (skip) при этом не трогается.
+
+См. `handoff-1.md` и `embedder/README.md` для полного контекста.

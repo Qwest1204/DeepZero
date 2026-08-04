@@ -1,12 +1,20 @@
-"""Predictor Transformer with MDN head for dynamics prediction in latent space.
+"""Predictor Transformer with MDN head for dynamics over the VAE latent pair.
 
-Given a sequence of latent vectors ``z`` and corresponding actions, the model
-predicts the distribution of the next latent ``z_{t+1}`` as a Mixture of Gaussians.
+The model consumes the VAE posterior pair ``(mu, logvar)`` of the current latent
+sequence and predicts the mixture-of-Gaussians parameters of the next latent
+``(pi, mu_next, logvar_next)`` plus an optional ``normal`` reward head
+``(reward_mean, reward_logvar)``. The latent is either spatial
+``(B, S, C, H, W)`` or flat ``(B, S, z_dim)``; both are flattened into a single
+token per timestep and restored to ``latent_shape`` on the output.
 """
 
 import json
 import math
 import os
+from dataclasses import asdict, dataclass, fields
+from functools import reduce
+from operator import mul
+from typing import Union
 
 import torch
 import torch.nn as nn
@@ -14,6 +22,82 @@ import torch.nn.functional as F
 from safetensors.torch import load_file, save_file
 
 from embedder.attention import MultiHeadAttention
+
+
+def _prod(shape) -> int:
+    return reduce(mul, shape, 1)
+
+
+@dataclass
+class PredictorConfig:
+    """Hyper-parameters of the predictor transformer.
+
+    ``latent_shape`` is either a spatial layout ``(C, H, W)`` or a flat size
+    ``(z_dim,)``; ``z_dim = prod(latent_shape)`` and must not be set manually.
+
+    Args:
+        latent_shape: Spatial or flat latent shape of the VAE.
+        act_space: Dimensionality of the action input (one-hot for discrete
+            Doom actions, raw vector for continuous Car/MW actions).
+        d_model: Transformer model dimension.
+        n_layer: Number of transformer blocks.
+        n_head: Number of attention heads.
+        n_gaussians: Number of mixture components in the MDN head.
+        max_len: Sequence length (windows are truncated to this).
+        act_dim: Dimension of the action embedding.
+        dropout: Dropout probability.
+        predict_reward: Add a ``normal`` reward head.
+        reward_mode: Distribution of the reward head (``"normal"`` only).
+        reward_bins: Reserved for a future categorical reward head.
+        rotary_theta: Reserved for a future RoPE position embedding.
+    """
+
+    latent_shape: tuple
+    act_space: int = 7
+    d_model: int = 1024
+    n_layer: int = 6
+    n_head: int = 8
+    n_gaussians: int = 4
+    max_len: int = 32
+    act_dim: int = 256
+    dropout: float = 0.1
+    predict_reward: bool = True
+    reward_mode: str = "normal"
+    reward_bins: int = 256
+    rotary_theta: float = 10000.0
+
+    def __post_init__(self):
+        if not isinstance(self.latent_shape, (tuple, list)) or len(self.latent_shape) not in (1, 3):
+            raise ValueError(
+                f"latent_shape должен быть (z_dim,) или (C, H, W), got {self.latent_shape!r}"
+            )
+        self.latent_shape = tuple(int(v) for v in self.latent_shape)
+        if self.d_model % self.n_head != 0:
+            raise ValueError(f"d_model ({self.d_model}) должен делиться на n_head ({self.n_head})")
+        for name in ("act_space", "d_model", "n_layer", "n_head", "n_gaussians",
+                     "max_len", "act_dim"):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"{name} должен быть положительным, got {getattr(self, name)}")
+        if self.reward_mode not in ("normal", "categorical"):
+            raise ValueError(
+                f"reward_mode должен быть 'normal' или 'categorical', got {self.reward_mode!r}"
+            )
+
+    @property
+    def z_dim(self) -> int:
+        """Flattened latent dimension, derived from ``latent_shape``."""
+        return _prod(self.latent_shape)
+
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        d["latent_shape"] = list(self.latent_shape)
+        return d
+
+    @classmethod
+    def from_dict(cls, cfg: dict) -> "PredictorConfig":
+        known = {f.name for f in fields(cls) if f.init}
+        filtered = {k: v for k, v in cfg.items() if k in known}
+        return cls(**filtered)
 
 
 class SinusoidalPositionalEncoding(nn.Module):
@@ -40,15 +124,7 @@ class SinusoidalPositionalEncoding(nn.Module):
 
 
 class SimpleFFN(nn.Module):
-    """Two-layer feed-forward network with GELU activation.
-
-    Used as the FFN sub-layer inside each Transformer block.
-
-    Args:
-        d_model: Input / output dimension.
-        d_ff: Hidden dimension (typically 4 * d_model).
-        dropout: Dropout probability after activation.
-    """
+    """Two-layer feed-forward network with GELU activation."""
 
     def __init__(self, d_model: int, d_ff: int, dropout: float = 0.1):
         super().__init__()
@@ -62,15 +138,9 @@ class SimpleFFN(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    """Pre-LayerNorm Transformer encoder block with causal self-attention.
+    """Pre-LayerNorm Transformer block with causal self-attention.
 
-    Architecture: Norm → MHA (causal) → residual → Norm → FFN → residual.
-
-    Args:
-        d_model: Model dimension.
-        num_heads: Number of attention heads.
-        d_ff: Feed-forward hidden dimension.
-        dropout: Dropout probability.
+    Norm → MHA (causal) → residual → Norm → FFN → residual.
     """
 
     def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout: float = 0.1):
@@ -84,204 +154,205 @@ class TransformerBlock(nn.Module):
         self.dropout2 = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        causal_x = self.norm1(x)
-        causal_x = self.mha(causal_x, causal_x, causal_x, is_causal=True)
-        x = x + self.dropout1(causal_x)
+        xn = self.norm1(x)
+        x = x + self.dropout1(self.mha(xn, xn, xn, is_causal=True))
 
-        ff_x = self.norm2(x)
-        ff_x = self.ffn(ff_x)
-        x = x + self.dropout2(ff_x)
+        ff = self.norm2(x)
+        x = x + self.dropout2(self.ffn(ff))
         return x
 
 
 class PredictorTransformer(nn.Module):
-    """Transformer-based dynamics predictor with a Mixture-of-Gaussians head.
+    """Transformer dynamics predictor over the VAE latent pair.
 
-    Embeds the concatenation ``[z_t, a_t]`` into ``d_model``, applies
-    ``n_layer`` causal Transformer blocks, then projects to MDN parameters
-    ``(pi, mu, sigma)`` for the next latent ``z_{t+1}``.
+    Concatenates the flattened ``mean`` and ``logvar`` of each latent token with
+    the action embedding, runs ``n_layer`` causal blocks, then issues:
+      * an MDN head ``(pi, mu, logvar)`` for the next latent, and
+      * a ``normal`` head ``(mean, logvar)`` for the next reward.
 
     Args:
-        z_dim: Dimensionality of the latent vector.
-        act_dim: Dimensionality of the action embedding.
-        d_model: Transformer model dimension.
-        act_space: Size of the action space (input to action embedder).
-        n_layer: Number of Transformer blocks.
-        n_head: Number of attention heads.
-        max_len: Maximum sequence length for positional encoding.
-        n_gaussians: Number of mixture components in the MDN head.
+        config: A :class:`PredictorConfig` instance.
+        device: Optional device to place parameters on.
     """
 
-    def __init__(
-        self,
-        z_dim: int,
-        act_dim: int,
-        d_model: int,
-        act_space: int,
-        n_layer: int,
-        n_head: int,
-        max_len: int,
-        n_gaussians: int,
-    ):
+    def __init__(self, config: PredictorConfig, device: Union[str, torch.device, None] = None):
         super().__init__()
-        self.z_dim = z_dim
-        self.act_dim = act_dim
-        self.d_model = d_model
-        self.act_space = act_space
-        self.n_layer = n_layer
-        self.n_head = n_head
-        self.max_len = max_len
-        self.n_gaussians = n_gaussians
+        self.config = config
+        c = config
+        z_dim = c.z_dim
 
-        self.act_embedder = nn.Linear(act_space, act_dim)
-        self.in_proj = nn.Linear(z_dim + act_dim, d_model)
+        self.act_embedder = nn.Linear(c.act_space, c.act_dim)
+        self.in_proj = nn.Linear(2 * z_dim + c.act_dim, c.d_model)
 
-        self.pe = SinusoidalPositionalEncoding(d_model, max_len)
-
+        self.pe = SinusoidalPositionalEncoding(c.d_model, c.max_len)
         self.layers = nn.ModuleList(
             [
-                TransformerBlock(d_model, n_head, 4 * d_model, dropout=0.1)
-                for _ in range(n_layer)
+                TransformerBlock(c.d_model, c.n_head, 4 * c.d_model, dropout=c.dropout)
+                for _ in range(c.n_layer)
             ]
         )
 
-        self.pi_head = nn.Linear(d_model, n_gaussians)
-        self.mu_head = nn.Linear(d_model, n_gaussians * z_dim)
-        self.logsigma_head = nn.Linear(d_model, n_gaussians * z_dim)
+        self.pi_head = nn.Linear(c.d_model, c.n_gaussians)
+        self.mu_head = nn.Linear(c.d_model, c.n_gaussians * z_dim)
+        self.logvar_head = nn.Linear(c.d_model, c.n_gaussians * z_dim)
 
+        self.reward_head = nn.Linear(c.d_model, 2)  # (mean, log_var)
+
+        if device is not None:
+            self.to(device)
+
+    # ------------------------------------------------------------------
+    # Forward
+    # ------------------------------------------------------------------
     def forward(
         self,
-        z: torch.Tensor,
+        mu: torch.Tensor,
+        logvar: torch.Tensor,
         actions: torch.Tensor,
-        mode: str = "sample",
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor] | torch.Tensor:
-        """Predict next latent distribution or sample.
+        mode: str = "all",
+    ) -> Union[torch.Tensor, tuple]:
+        """Predict the next latent distribution (and optionally reward).
 
         Args:
-            z: Latent sequence ``(B, S, z_dim)``.
-            actions: Action sequence ``(B, S, act_space)``.
-            mode: One of ``"sample"`` (returns sample from MDN),
-                ``"mean"`` (returns mean of the most likely component),
-                ``"all"`` (returns ``(pi, mu, sigma)``).
+            mu: VAE mean of the latent sequence ``(B, S, C, H, W)`` or ``(B, S, z_dim)``.
+            logvar: VAE log-var of the latent sequence, same shape as ``mu``.
+            actions: Action sequence ``(B, S, act_space)`` (one-hot or raw).
+            mode: ``"all"``, ``"mean"`` or ``"sample"``.
 
-        Returns:
-            If mode is ``"sample"`` or ``"mean"``: predicted ``z_next (B, S, z_dim)``.
-            If mode is ``"all"``: ``(pi, mu, sigma)`` where
-                - pi:    ``(B, S, n_gaussians)``
-                - mu:    ``(B, S, n_gaussians, z_dim)``
-                - sigma: ``(B, S, n_gaussians, z_dim)``
+        Returns (mode):
+            - ``"all"``: ``(pi, mu_next, logvar_next, reward)`` with
+              ``pi (B, S, G)``,
+              ``mu_next/logvar_next (B, S, G, *latent_shape)`` and
+              ``reward (B, S, 2)`` (or ``None`` if ``predict_reward=False``).
+            - ``"mean"``: ``(mu_best, logvar_best)`` ``(B, S, *latent_shape)``.
+            - ``"sample"``: a sampled ``z_next (B, S, *latent_shape)``.
         """
+        cfg = self.config
+        mu_f, logvar_f = self._flatten(mu), self._flatten(logvar)
+        B, S = mu_f.shape[0], mu_f.shape[1]
+
         act_emb = self.act_embedder(actions)
-        in_x = torch.cat([z, act_emb], dim=-1)
+        in_x = torch.cat([mu_f, logvar_f, act_emb], dim=-1)
         x = self.in_proj(in_x)
         x = self.pe(x)
-
         for layer in self.layers:
             x = layer(x)
 
-        B, S, _ = x.shape
-
-        pi = F.softmax(self.pi_head(x), dim=-1)
-        mu = self.mu_head(x).view(B, S, self.n_gaussians, self.z_dim)
-        sigma = torch.exp(self.logsigma_head(x).view(B, S, self.n_gaussians, self.z_dim)) + 1e-6
+        pi = F.softmax(self.pi_head(x), dim=-1)  # (B, S, G)
+        mu_n = self.mu_head(x).view(B, S, cfg.n_gaussians, cfg.z_dim)
+        logvar_n = self.logvar_head(x).view(B, S, cfg.n_gaussians, cfg.z_dim)
 
         if mode == "all":
-            return pi, mu, sigma
+            shape = (B, S, cfg.n_gaussians, *cfg.latent_shape)
+            out_mu = mu_n.reshape(shape)
+            out_logvar = logvar_n.reshape(shape)
+            reward = None
+            if cfg.predict_reward:
+                reward = self.reward_head(x)  # (B, S, 2)
+            return pi, out_mu, out_logvar, reward
 
+        best = pi.argmax(dim=-1, keepdim=True)  # (B, S, 1)
+        idx = best.unsqueeze(-1).expand(-1, -1, -1, cfg.z_dim)
+        mu_best = mu_n.gather(2, idx).squeeze(2)
+        logvar_best = logvar_n.gather(2, idx).squeeze(2)
+
+        out_shape = (B, S, *cfg.latent_shape)
         if mode == "mean":
-            best = pi.argmax(dim=-1, keepdim=True)  # (B, S, 1)
-            z_next = mu.gather(
-                2, best.unsqueeze(-1).expand(-1, -1, -1, self.z_dim)
-            ).squeeze(2)
-            return z_next
+            return mu_best.reshape(out_shape), logvar_best.reshape(out_shape)
 
-        # mode == "sample"
-        return self.sample(pi, mu, sigma)
+        if mode == "sample":
+            z = mu_best + torch.randn_like(mu_best) * torch.exp(0.5 * logvar_best)
+            return z.reshape(out_shape)
 
-    def sample(
-        self,
-        pi: torch.Tensor,
-        mu: torch.Tensor,
-        sigma: torch.Tensor,
-        temperature: float = 1.0,
-    ) -> torch.Tensor:
-        """Sample ``z_{t+1}`` from the mixture of Gaussians.
+        raise ValueError(f"Неизвестный режим {mode!r}")
 
-        Args:
-            pi: Mixture weights ``(B, S, n_gaussians)``.
-            mu: Component means ``(B, S, n_gaussians, z_dim)``.
-            sigma: Component stds ``(B, S, n_gaussians, z_dim)``.
-            temperature: Softmax temperature for ``pi`` (1 = unchanged).
+    def _flatten(self, q: torch.Tensor) -> torch.Tensor:
+        """Flatten a latent sequence to ``(B, S, z_dim)``."""
+        if q.ndim == 3:
+            return q
+        if q.ndim == 5:
+            return q.reshape(q.shape[0], q.shape[1], self.config.z_dim)
+        raise ValueError(f"Ожидался (B,S,C,H,W) или (B,S,z_dim), got {tuple(q.shape)}")
 
-        Returns:
-            Sampled latent ``(B, S, z_dim)``.
-        """
-        B, S, n_g, z_dim = mu.shape
-
-        if temperature != 1.0:
-            pi = (pi + 1e-10).log() / temperature
-            pi = F.softmax(pi, dim=-1)
-
-        component = torch.multinomial(
-            pi.view(B * S, n_g), num_samples=1
-        ).view(B, S, 1, 1)
-
-        mu_selected = mu.gather(dim=2, index=component.expand(-1, -1, -1, z_dim))
-        sigma_selected = sigma.gather(dim=2, index=component.expand(-1, -1, -1, z_dim))
-
-        eps = torch.randn_like(mu_selected)
-        return (mu_selected + sigma_selected * eps).squeeze(2)
-
+    # ------------------------------------------------------------------
+    # Losses
+    # ------------------------------------------------------------------
     @staticmethod
     def mdn_loss(
         pi: torch.Tensor,
         mu: torch.Tensor,
-        sigma: torch.Tensor,
-        target: torch.Tensor,
+        logvar: torch.Tensor,
+        target_mu: torch.Tensor,
+        target_logvar: torch.Tensor,
     ) -> torch.Tensor:
-        """Mixture-of-Gaussians negative log-likelihood loss.
+        """Negative expected log-likelihood of an MDN vs the VAE posterior pair.
 
-        Args:
-            pi: Mixture weights ``(B, S, n_gaussians)``.
-            mu: Component means ``(B, S, n_gaussians, z_dim)``.
-            sigma: Component stds ``(B, S, n_gaussians, z_dim)``.
-            target: Ground-truth next latent ``(B, S, z_dim)``.
+        The target is a noisy observation of the latent state:
+        ``p(z_tgt) = N(mu_tgt, var_tgt)``.  We maximise
+        ``E_{z_tgt}[log Σ_g π_g N(z_tgt | mu_g, var_g)]``,
+        which evaluates to:
 
-        Returns:
-            Scalar NLL averaged over all elements.
+        ``log_prob_g = -½ Σ_d [ log var_{g,d} + (var_{tgt,d} + Δ²_{g,d}) / var_{g,d} ]``.
+
+        This formulation forces the predictor to produce well-calibrated
+        variances (the optimal ``var_g`` equals ``var_tgt + (mu_g - mu_tgt)²``),
+        preventing the variance collapse that the simpler convolution loss allows.
         """
-        z_dim = target.size(-1)
-        target = target.unsqueeze(-2)
+        B, S = pi.shape[0], pi.shape[1]
 
-        const = -0.5 * z_dim * math.log(2 * math.pi)
-        log_prob = (
-            const
-            - sigma.log().sum(dim=-1)
-            - 0.5 * ((target - mu) / sigma).pow(2).sum(dim=-1)
-        )
+        def flat_comp(t):
+            return t.reshape(t.shape[0], t.shape[1], t.shape[2], -1) if t.ndim >= 4 else t
+
+        def flat_target(t):
+            return t.reshape(t.shape[0], t.shape[1], -1) if t.ndim >= 4 else t
+
+        mu = flat_comp(mu)
+        logvar = flat_comp(logvar)
+        target_mu = flat_target(target_mu)
+        target_logvar = flat_target(target_logvar)
+
+        z_dim = target_mu.size(-1)
+
+        var_pred = torch.exp(logvar).clamp(min=1e-8)
+        var_tgt = torch.exp(target_logvar.unsqueeze(-2))
+
+        diff2 = (target_mu.unsqueeze(-2) - mu).pow(2)
+
+        log_prob = -0.5 * z_dim * math.log(2 * math.pi)
+        log_prob = log_prob - 0.5 * (logvar + (var_tgt + diff2) / var_pred).sum(-1)
 
         log_weighted = log_prob + (pi + 1e-10).log()
         nll = -torch.logsumexp(log_weighted, dim=-1)
         return nll.mean()
 
-    # ------------------------------------------------------------------
-    # Serialisation: config.json + model.safetensors
-    # ------------------------------------------------------------------
+    @staticmethod
+    def reward_loss(
+        reward_mean: torch.Tensor,
+        reward_logvar: torch.Tensor,
+        target_reward: torch.Tensor,
+    ) -> torch.Tensor:
+        """Mean Gaussian NLL for the reward head.
 
-    def _config_dict(self) -> dict:
-        return {
-            "z_dim": self.z_dim,
-            "act_dim": self.act_dim,
-            "d_model": self.d_model,
-            "act_space": self.act_space,
-            "n_layer": self.n_layer,
-            "n_head": self.n_head,
-            "max_len": self.max_len,
-            "n_gaussians": self.n_gaussians,
-        }
+        Args:
+            reward_mean: ``(B, S)`` or ``(B, S, 1)``.
+            reward_logvar: ``(B, S)`` or ``(B, S, 1)``.
+            target_reward: ``(B, S)`` reward of the next step.
+        """
+        mean = reward_mean.squeeze(-1)
+        logvar = reward_logvar.squeeze(-1)
+        tgt = target_reward
+        var = torch.exp(logvar) + 1e-6
+        return 0.5 * (logvar + (tgt - mean).pow(2) / var).mean()
 
+    def num_parameters(self) -> int:
+        """Total number of trainable parameters."""
+        return sum(p.numel() for p in self.parameters())
+
+    # ------------------------------------------------------------------
+    # Serialisation: config.json + model.safetensors (same as the VAE)
+    # ------------------------------------------------------------------
     def save_pretrained(self, save_dir: str):
-        """Save model weights (safetensors) and architecture config (JSON).
+        """Save weights (safetensors) and architecture config (JSON).
 
         Creates ``save_dir/config.json`` and ``save_dir/model.safetensors``.
         """
@@ -290,25 +361,22 @@ class PredictorTransformer(nn.Module):
         weights_path = os.path.join(save_dir, "model.safetensors")
 
         with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(self._config_dict(), f, indent=2, ensure_ascii=False)
+            json.dump(self.config.to_dict(), f, indent=2, ensure_ascii=False)
 
         state_dict = {k: v.contiguous() for k, v in self.state_dict().items()}
         save_file(state_dict, weights_path)
 
     @classmethod
     def from_pretrained(cls, save_dir: str, map_location: str = "cpu") -> "PredictorTransformer":
-        """Load a model from a previously saved ``save_pretrained`` directory.
-
-        Reads ``config.json`` to reconstruct the architecture, then loads
-        ``model.safetensors`` and restores the state dict.
-        """
+        """Load a model from a previously saved ``save_pretrained`` directory."""
         config_path = os.path.join(save_dir, "config.json")
         weights_path = os.path.join(save_dir, "model.safetensors")
 
         with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
+            cfg_dict = json.load(f)
 
-        model = cls(**config)
+        config = PredictorConfig.from_dict(cfg_dict)
+        model = cls(config)
         state_dict = load_file(weights_path, device=str(map_location))
         model.load_state_dict(state_dict)
         return model
